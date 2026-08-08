@@ -39,6 +39,24 @@ docker compose up -d --build
 http://<advertise-ip>/debug
 ```
 
+### Pre-built images (GitHub Releases)
+
+Publishing a GitHub Release builds and pushes the image to GHCR:
+
+```bash
+docker pull ghcr.io/wgentine/sigelly_emu:latest
+# or a specific tag, e.g. 0.1.0 / v0.1.0
+docker pull ghcr.io/wgentine/sigelly_emu:0.1.0
+```
+
+Point `docker-compose.yml` at that image, or run:
+
+```bash
+docker run --rm --network host --env-file .env \
+  -v sigelly-data:/data \
+  ghcr.io/wgentine/sigelly_emu:latest
+```
+
 ## Alfen prerequisites
 
 In **ACE Service Installer**:
