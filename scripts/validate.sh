@@ -65,7 +65,7 @@ import json,sys
 d=json.load(sys.stdin)
 assert d.get("gen")==2, d
 assert d.get("auth_en") is False, d
-assert "model" in d and "SHPRO-3EM" in str(d["model"]), d
+assert "model" in d and "SPEM-003CEBEU63" in str(d["model"]), d
 assert "mac" in d and d["mac"], d
 '
 

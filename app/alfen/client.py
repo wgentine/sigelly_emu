@@ -119,30 +119,45 @@ class AlfenClient:
 
     def _close(self) -> None:
         with self._lock:
-            if self._client:
-                try:
-                    self._client.close()
-                except Exception:  # noqa: BLE001
-                    pass
-                self._client = None
+            client = self._client
+            self._client = None
             self._connected = False
+        if client:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _ensure_connected(self) -> bool:
         with self._lock:
-            if self._client and self._client.connected:
+            client = self._client
+            if client is not None and client.connected:
                 self._connected = True
                 return True
-            if self._client:
+            self._client = None
+            self._connected = False
+
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        new_client = ModbusTcpClient(
+            host=self.host,
+            port=self.port,
+            timeout=self.connect_timeout,
+        )
+        ok = bool(new_client.connect())
+        with self._lock:
+            if self._stop.is_set():
                 try:
-                    self._client.close()
+                    new_client.close()
                 except Exception:  # noqa: BLE001
                     pass
-            self._client = ModbusTcpClient(
-                host=self.host,
-                port=self.port,
-                timeout=self.connect_timeout,
-            )
-            ok = bool(self._client.connect())
+                self._connected = False
+                return False
+            self._client = new_client
             self._connected = ok
             if not ok:
                 self._last_error = f"connect_failed:{self.host}:{self.port}"
@@ -152,34 +167,44 @@ class AlfenClient:
             return ok
 
     def _read_holding(self) -> Optional[list]:
+        # Do not hold self._lock across the network round-trip — a wedged Modbus
+        # socket would otherwise block /healthz and freeze the poller loop bookkeeping.
         with self._lock:
-            if not self._client:
-                return None
-            # pymodbus 3.x uses device_id / slave depending on version
+            client = self._client
+        if client is None:
+            return None
+        try:
             try:
-                result = self._client.read_holding_registers(
+                result = client.read_holding_registers(
                     address=REGISTER_START,
                     count=REGISTER_COUNT,
                     device_id=self.slave_id,
                 )
             except TypeError:
-                result = self._client.read_holding_registers(
+                result = client.read_holding_registers(
                     address=REGISTER_START,
                     count=REGISTER_COUNT,
                     slave=self.slave_id,
                 )
-            except ModbusException as exc:
+        except ModbusException as exc:
+            with self._lock:
                 self._last_error = str(exc)
-                return None
+            return None
+        except Exception as exc:  # noqa: BLE001
+            with self._lock:
+                self._last_error = f"modbus_exception:{exc}"
+            return None
 
-            if result is None or (hasattr(result, "isError") and result.isError()):
+        if result is None or (hasattr(result, "isError") and result.isError()):
+            with self._lock:
                 self._last_error = f"modbus_error:{result!r}"
-                return None
-            regs = getattr(result, "registers", None)
-            if not regs:
+            return None
+        regs = getattr(result, "registers", None)
+        if not regs:
+            with self._lock:
                 self._last_error = "empty_registers"
-                return None
-            return list(regs)
+            return None
+        return list(regs)
 
     def poll_once(self) -> AlfenMeasurements:
         """Perform a single poll; retain last-good values on failure."""

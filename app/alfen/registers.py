@@ -96,6 +96,63 @@ def _d(regs: List[int], address: int) -> Optional[float]:
     return decode_float64(regs, offset)
 
 
+def _split_by_current(
+    total: float, a_current: float, b_current: float, c_current: float
+) -> tuple[float, float, float]:
+    """Split a sum quantity across phases proportional to |I| (or all on A)."""
+    weights = (abs(a_current), abs(b_current), abs(c_current))
+    weight_sum = sum(weights)
+    if weight_sum <= 0.0:
+        return total, 0.0, 0.0
+    return (
+        total * (weights[0] / weight_sum),
+        total * (weights[1] / weight_sum),
+        total * (weights[2] / weight_sum),
+    )
+
+
+def _distribute_missing_phase_powers(m: AlfenMeasurements) -> None:
+    """Fill missing per-phase active power from the sum register + currents."""
+    if m.total_act_power == 0.0:
+        return
+    if m.a_act_power or m.b_act_power or m.c_act_power:
+        return
+    m.a_act_power, m.b_act_power, m.c_act_power = _split_by_current(
+        m.total_act_power, m.a_current, m.b_current, m.c_current
+    )
+
+
+def _distribute_missing_aprt_powers(m: AlfenMeasurements) -> None:
+    """Fill missing per-phase apparent power from sum or V*I."""
+    if m.total_aprt_power == 0.0:
+        m.a_aprt_power = abs(m.a_voltage * m.a_current)
+        m.b_aprt_power = abs(m.b_voltage * m.b_current)
+        m.c_aprt_power = abs(m.c_voltage * m.c_current)
+        m.total_aprt_power = m.a_aprt_power + m.b_aprt_power + m.c_aprt_power
+        return
+    if m.a_aprt_power or m.b_aprt_power or m.c_aprt_power:
+        return
+    m.a_aprt_power, m.b_aprt_power, m.c_aprt_power = _split_by_current(
+        m.total_aprt_power, m.a_current, m.b_current, m.c_current
+    )
+
+
+def _fill_power_factor(m: AlfenMeasurements) -> None:
+    """Derive PF from P/(V*I) when Alfen leaves PF registers unavailable."""
+
+    def _pf(power: float, voltage: float, current: float, existing: float) -> float:
+        if existing:
+            return existing
+        denom = abs(voltage * current)
+        if denom <= 1e-6:
+            return 0.0
+        return max(-1.0, min(1.0, power / denom))
+
+    m.a_pf = _pf(m.a_act_power, m.a_voltage, m.a_current, m.a_pf)
+    m.b_pf = _pf(m.b_act_power, m.b_voltage, m.b_current, m.b_pf)
+    m.c_pf = _pf(m.c_act_power, m.c_voltage, m.c_current, m.c_pf)
+
+
 def parse_registers(regs: List[int]) -> AlfenMeasurements:
     """Parse a contiguous register block starting at 306 into measurements."""
     if len(regs) < REGISTER_COUNT:
@@ -130,6 +187,9 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
     # If sum register is NaN/zero but phases have power, synthesize total
     if m.total_act_power == 0.0 and (m.a_act_power or m.b_act_power or m.c_act_power):
         m.total_act_power = m.a_act_power + m.b_act_power + m.c_act_power
+    # Alfen often leaves per-phase active power as 0xFFFF while publishing
+    # sum power + phase currents (typical for single-phase charging).
+    _distribute_missing_phase_powers(m)
 
     m.a_aprt_power = _f(regs, 346)
     m.b_aprt_power = _f(regs, 348)
@@ -137,6 +197,9 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
     m.total_aprt_power = _f(regs, 352)
     if m.total_aprt_power == 0.0 and (m.a_aprt_power or m.b_aprt_power or m.c_aprt_power):
         m.total_aprt_power = m.a_aprt_power + m.b_aprt_power + m.c_aprt_power
+    _distribute_missing_aprt_powers(m)
+
+    _fill_power_factor(m)
 
     # Real Energy Delivered L1/L2/L3/Sum (Wh) — FLOAT64
     m.a_total_act_energy = _d(regs, 362)
