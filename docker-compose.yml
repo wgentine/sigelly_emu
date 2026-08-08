@@ -4,9 +4,18 @@ services:
     # Local rebuild instead of GHCR: comment out `image:` and uncomment:
     # build: .
     container_name: sigelly-emu
-    # Host networking is required for mDNS multicast and Shelly-like port 80.
+    # Host networking is required for mDNS multicast and a real Shelly-like :80.
+    # (On Docker Desktop for Mac/Windows, host mode is limited — prefer a Linux host.)
     network_mode: host
     env_file: .env
+    environment:
+      # Keep in sync with .env; default matches a real Shelly HTTP port.
+      HTTP_PORT: ${HTTP_PORT:-80}
+    # Privileged port (<1024). Needed if the process is not fully privileged root,
+    # and harmless when it is. Rootless Docker still cannot bind :80 without
+    # host sysctl net.ipv4.ip_unprivileged_port_start=0 (or use HTTP_PORT=8080).
+    cap_add:
+      - NET_BIND_SERVICE
     volumes:
       - sigelly-data:/data
     restart: unless-stopped

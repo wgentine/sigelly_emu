@@ -133,15 +133,17 @@ If the WLAN scan shows unrelated “unknown” ESP32 devices, try a cleaner test
 
 ## Bridge networking alternative
 
-If host networking is unavailable:
+If host networking is unavailable (e.g. Docker Desktop), map host port **80** explicitly. mDNS discovery is often unreliable in this mode — set `SHELLY_ADVERTISE_IP` to the host LAN IP and prefer a Linux host with `network_mode: host` for Sigenstor pairing.
 
 ```yaml
 # not recommended for mDNS — example only
 services:
   sigelly-emu:
-    build: .
+    image: ghcr.io/wgentine/sigelly_emu:${SIGELLY_TAG:-latest}
     ports:
-      - "8080:80"
+      - "80:80"
+    cap_add:
+      - NET_BIND_SERVICE
     environment:
       SHELLY_ADVERTISE_IP: "192.168.x.x"  # host LAN IP
       HTTP_PORT: "80"
@@ -149,6 +151,8 @@ services:
     volumes:
       - sigelly-data:/data
 ```
+
+Binding host port 80 requires a privileged Docker daemon (not rootless). If that fails, use `8080:8080` with `HTTP_PORT=8080` (Sigenstor/mySigen typically expect port 80).
 
 mDNS may still fail across Docker bridge networks; prefer `network_mode: host`.
 
@@ -171,4 +175,4 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 | Found but won't enroll | `GET /shelly` must show `auth_en: false`; no password |
 | Power always 0 | Alfen Modbus enabled? `ALFEN_HOST` reachable? `/debug` Alfen section |
 | Nonsense power values | Byte order / Modbus map — compare Alfen UI vs `/rpc/EM.GetStatus` |
-| Port 80 permission denied | Run via Docker, or set `HTTP_PORT=8080` locally |
+| Port 80 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind :80 — use a normal Docker daemon, or `HTTP_PORT=8080` |
