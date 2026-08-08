@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 _FC_READ_HOLDING = 0x03
 _FC_READ_INPUT = 0x04
-_EX_ILLEGAL_FUNCTION = 0x01
 _EX_ILLEGAL_ADDRESS = 0x02
 
 
@@ -147,13 +146,14 @@ class ShellyModbusServer:
     def _regs(self) -> Dict[int, int]:
         return build_register_map(self.settings, self.store.snapshot())
 
-    def _handle_pdu(self, unit: int, pdu: bytes) -> bytes:
-        # Real Shelly answers any unit id (Sigen uses 7); echo it back.
+    def _handle_pdu(self, _unit: int, pdu: bytes) -> bytes:
+        # Real Shelly answers any unit id (Sigen uses 7); caller echoes it back.
         if len(pdu) < 1:
             return b""
         fc = pdu[0]
         if fc not in (_FC_READ_HOLDING, _FC_READ_INPUT):
-            return bytes([fc | 0x80, _EX_ILLEGAL_FUNCTION])
+            # Real fw returns illegal address for unsupported FCs (e.g. FC01 coils).
+            return bytes([fc | 0x80, _EX_ILLEGAL_ADDRESS])
         if len(pdu) < 5:
             return bytes([fc | 0x80, _EX_ILLEGAL_ADDRESS])
         address = (pdu[1] << 8) | pdu[2]
@@ -194,18 +194,6 @@ class ShellyModbusServer:
                 resp = tid + b"\x00\x00" + struct.pack(">H", 1 + len(resp_pdu)) + bytes([unit]) + resp_pdu
                 writer.write(resp)
                 await writer.drain()
-                fc = pdu[0] if pdu else -1
-                addr = ((pdu[1] << 8) | pdu[2]) if len(pdu) >= 5 else -1
-                count = ((pdu[3] << 8) | pdu[4]) if len(pdu) >= 5 else -1
-                logger.info(
-                    "modbus %s unit=%s fc=%s addr=%s count=%s -> %sB",
-                    peer_s,
-                    unit,
-                    fc,
-                    addr,
-                    count,
-                    len(resp_pdu),
-                )
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError):
             pass
         except Exception:  # noqa: BLE001

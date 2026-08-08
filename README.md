@@ -2,14 +2,14 @@
 
 Emulates a **Shelly Pro 3EM-3CT63** on the LAN so Sigenergy Sigenstor / mySigen can discover it and read live power. Measurement values are polled from an **Alfen Eve Pro Single** over Modbus TCP.
 
-This is a deliberate v2 rewrite. The earlier minimal Flask prototype (`virtual_shelly.py`) was too incomplete for real Shelly/Sigenstor clients.
-
 ## Architecture
 
 ```
-Alfen Eve Pro Single  --Modbus TCP:502-->  sigelly_emu  --HTTP RPC + mDNS-->  Sigenstor
-     (slave ID 1)                         (Docker / host)
+Alfen Eve Pro Single --Modbus TCP:502--> sigelly_emu --Shelly Modbus TCP:502--> Sigenstor
+     (slave ID 1)                        (Docker)    --HTTP :80 + mDNS------> discovery
 ```
+
+Sigenstor’s live meter path is **Shelly Modbus TCP** (input registers, any unit id — mySigen uses 7). HTTP RPC and mDNS are used for discovery / identity; the production entrypoint is `python -m app.wire_server` (byte-accurate ShellyHTTP headers).
 
 ## Quick start (Docker)
 
@@ -29,14 +29,23 @@ docker compose up -d
 
 To build from this tree instead, edit `docker-compose.yml` (swap `image:` for `build: .`) or run `docker compose up -d --build` after enabling `build:`.
 
-3. Validate the Shelly API surface before pairing Sigenstor:
+Publish **both** TCP **80** and **502** to the LAN (host/macvlan networking). Port 502 is required for Sigenstor metering.
+
+3. Validate the Shelly HTTP API surface before pairing Sigenstor:
 
 ```bash
 ./scripts/validate.sh http://127.0.0.1
 # or: ./scripts/validate.sh http://<advertise-ip>
 ```
 
-4. Open diagnostics while pairing:
+4. Confirm Modbus (optional):
+
+```bash
+# Phase A voltage @ input register 1020 (Shelly doc addr 31020)
+# Use any unit id; Sigen uses 7.
+```
+
+5. Open diagnostics while pairing:
 
 ```text
 http://<advertise-ip>/debug
@@ -81,9 +90,12 @@ In **ACE Service Installer**:
 | `SHELLY_DEVICE_ID` | `349454112233` | 12-char hex ID used in mDNS name |
 | `SHELLY_MAC` | `34:94:54:11:22:33` | Reported MAC |
 | `SHELLY_MODEL` | `SPEM-003CEBEU63` | Device model string (real 3CT63 SKU) |
-| `SHELLY_FIRMWARE` | `1.4.4` | Reported firmware version |
+| `SHELLY_FIRMWARE` | `2.0.0` | Reported firmware version |
 | `SHELLY_APP` | `Pro3EM` | mDNS / device app id |
 | `HTTP_PORT` | `80` | HTTP listen port |
+| `SHELLY_MODBUS_ENABLE` | `true` | Expose Shelly Modbus TCP for Sigenstor |
+| `SHELLY_MODBUS_PORT` | `502` | Shelly Modbus listen port |
+| `SHELLY_MODBUS_UNIT_ID` | `1` | Preferred unit id (any id accepted; Sigen uses 7) |
 | `SHELLY_ADVERTISE_IP` | *(auto)* | IP advertised via mDNS / wifi status |
 | `MDNS_ENABLE` | `true` | Advertise `_http._tcp` and `_shelly._tcp` |
 | `STATE_PATH` | `/data/state.json` | Persisted energy counters |
@@ -111,20 +123,22 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# edit ALFEN_HOST; for non-root use HTTP_PORT=8080
+# edit ALFEN_HOST; for non-root use HTTP_PORT=8080 (and SHELLY_MODBUS_PORT if needed)
 export STATE_PATH=./data/state.json
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --no-server-header --no-date-header
+python -m app.wire_server
 ./scripts/validate.sh http://127.0.0.1:8080
 ```
+
+`uvicorn app.main:app` remains available for HTTP-only debugging; production uses `app.wire_server`.
 ## Sigenstor / mySigen pairing
 
 1. Run `./scripts/validate.sh` successfully first.
-2. Put Sigen gateway and this host on the **same Wi‑Fi / LAN subnet**.
+2. Ensure TCP **80** and **502** are reachable from the Sigen gateway on the same LAN/VLAN.
 3. Disable Wi‑Fi client / AP isolation (breaks mDNS).
 4. Do **not** enable Shelly auth (`auth_en` must stay false).
 5. Phone on the same Wi‑Fi as Sigen during pairing.
-6. mySigen → Add device → Smart Load → **WLAN Network**.
-7. Watch `/debug` for which RPC methods Sigen calls.
+6. mySigen → Add device → energy meter / Shelly path → **WLAN Network**.
+7. After enroll, Sigen polls **Modbus TCP :502** (not HTTP) for live power/energy.
 
 If the WLAN scan shows unrelated “unknown” ESP32 devices, try a cleaner test SSID/VLAN with only Sigen + this emulator.
 
@@ -170,8 +184,9 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 
 | Symptom | Check |
 |---------|--------|
-| Sigen never finds device | host network, mDNS, same subnet, AP isolation, `/debug` mDNS section |
-| Found but won't enroll | `GET /shelly` must show `auth_en: false`; no password |
+| Sigen never finds device | host/macvlan network, mDNS, same subnet, AP isolation, `/debug` mDNS section |
+| Found but won't enroll | `GET /shelly` must show `auth_en: false`; no password; TCP 502 open |
+| Enrolls but no live data | Sigen must reach `:502`; watch for Modbus from the gateway IP |
 | Power always 0 | Alfen Modbus enabled? `ALFEN_HOST` reachable? `/debug` Alfen section |
 | Nonsense power values | Byte order / Modbus map — compare Alfen UI vs `/rpc/EM.GetStatus` |
-| Port 80 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind :80 — use a normal Docker daemon, or `HTTP_PORT=8080` |
+| Port 80/502 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind privileged ports |
