@@ -113,10 +113,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # edit ALFEN_HOST; for non-root use HTTP_PORT=8080
 export STATE_PATH=./data/state.json
-uvicorn app.main:app --host 0.0.0.0 --port 8080
+uvicorn app.main:app --host 0.0.0.0 --port 8080 --no-server-header
 ./scripts/validate.sh http://127.0.0.1:8080
 ```
-
 ## Sigenstor / mySigen pairing
 
 1. Run `./scripts/validate.sh` successfully first.

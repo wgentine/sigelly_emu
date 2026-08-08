@@ -121,6 +121,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="sigelly_emu", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
+@app.middleware("http")
+async def shelly_http_headers(request: Request, call_next):
+    """Match real Gen2 firmware response headers (Sigen fingerprints these)."""
+    response = await call_next(request)
+    response.headers["Server"] = "ShellyHTTP/1.0.0"
+    response.headers["Connection"] = "close"
+    # Real ShellyHTTP omits Date; drop uvicorn/Starlette's if present.
+    if "date" in response.headers:
+        del response.headers["date"]
+    return response
+
+
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
