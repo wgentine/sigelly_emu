@@ -20,26 +20,32 @@ class ShellyMdns:
         self._infos: List[ServiceInfo] = []
         self.last_error: Optional[str] = None
 
-    def _properties(self) -> dict:
+    def _properties_http(self) -> dict:
+        # Real _http._tcp TXT is only gen=2
+        return {b"gen": b"2"}
+
+    def _properties_shelly(self) -> dict:
+        # Real _shelly._tcp TXT: gen / app / ver only
         return {
             b"gen": b"2",
             b"app": self.settings.shelly_app.encode(),
             b"ver": self.settings.shelly_firmware.encode(),
-            b"mac": self.settings.shelly_device_id.encode(),
-            b"id": self.settings.device_hostname.encode(),
-            b"arch": b"esp32",
-            b"model": self.settings.shelly_model.encode(),
         }
 
     def _make_info(self, service_type: str) -> ServiceInfo:
         instance = self.settings.device_hostname
+        props = (
+            self._properties_http()
+            if service_type.startswith("_http.")
+            else self._properties_shelly()
+        )
         return ServiceInfo(
             service_type,
             f"{instance}.{service_type}",
             addresses=[socket.inet_aton(self.settings.advertise_ip)],
             port=self.settings.http_port,
-            properties=self._properties(),
-            server=f"{instance}.local.",
+            properties=props,
+            server=f"{self.settings.mdns_server_hostname}.local.",
         )
 
     def start(self) -> None:

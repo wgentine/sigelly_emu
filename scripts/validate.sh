@@ -65,8 +65,12 @@ import json,sys
 d=json.load(sys.stdin)
 assert d.get("gen")==2, d
 assert d.get("auth_en") is False, d
-assert "model" in d and "SPEM-003CEBEU63" in str(d["model"]), d
+# Real Pro 3EM-3CT63 SKU (not the legacy marketing string SHPRO-3EM-3CT63)
+model=str(d.get("model") or "")
+assert model=="SPEM-003CEBEU63", d
+assert d.get("app")=="Pro3EM", d
 assert "mac" in d and d["mac"], d
+assert d.get("id","").startswith("shellypro3em63-"), d
 '
 
 check_json "GET /rpc/EM.GetStatus?id=0" "$BASE_URL/rpc/EM.GetStatus?id=0" '

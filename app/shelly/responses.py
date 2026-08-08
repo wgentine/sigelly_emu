@@ -192,7 +192,7 @@ def build_sys_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
 
 
 def build_wifi_status(settings: Settings) -> Dict[str, Any]:
-    # Real Pro 3EM-3CT63 on Ethernet reports wifi disconnected.
+    # Match working eth-only Pro 3EM-3CT63 (192.168.30.35): WiFi stays disconnected.
     _ = settings
     return {
         "sta_ip": "0.0.0.0",
