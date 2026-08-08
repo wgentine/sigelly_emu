@@ -1,6 +1,8 @@
 services:
   sigelly-emu:
-    build: .
+    image: ghcr.io/wgentine/sigelly_emu:${SIGELLY_TAG:-latest}
+    # Local rebuild instead of GHCR: comment out `image:` and uncomment:
+    # build: .
     container_name: sigelly-emu
     # Host networking is required for mDNS multicast and Shelly-like port 80.
     network_mode: host

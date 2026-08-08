@@ -20,11 +20,14 @@ cp .env.example .env
 # set ALFEN_HOST, optionally SHELLY_ADVERTISE_IP
 ```
 
-2. Start with host networking (recommended for mDNS + port 80):
+2. Start with host networking (recommended for mDNS + port 80). Uses the pre-built GHCR image by default (`latest`, or set `SIGELLY_TAG`):
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+To build from this tree instead, edit `docker-compose.yml` (swap `image:` for `build: .`) or run `docker compose up -d --build` after enabling `build:`.
 
 3. Validate the Shelly API surface before pairing Sigenstor:
 
@@ -41,15 +44,15 @@ http://<advertise-ip>/debug
 
 ### Pre-built images (GitHub Releases)
 
-Publishing a GitHub Release builds and pushes the image to GHCR:
+Publishing a GitHub Release builds and pushes the image to GHCR. `docker-compose.yml` pulls that image by default:
 
 ```bash
 docker pull ghcr.io/wgentine/sigelly_emu:latest
-# or a specific tag, e.g. 0.1.0 / v0.1.0
-docker pull ghcr.io/wgentine/sigelly_emu:0.1.0
+# or pin a release, e.g.:
+SIGELLY_TAG=0.1.0 docker compose up -d
 ```
 
-Point `docker-compose.yml` at that image, or run:
+Or run without Compose:
 
 ```bash
 docker run --rm --network host --env-file .env \
