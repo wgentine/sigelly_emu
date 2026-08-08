@@ -80,7 +80,7 @@ In **ACE Service Installer**:
 | `ALFEN_CONNECT_TIMEOUT` | `3.0` | Modbus connect/read timeout |
 | `SHELLY_DEVICE_ID` | `349454112233` | 12-char hex ID used in mDNS name |
 | `SHELLY_MAC` | `34:94:54:11:22:33` | Reported MAC |
-| `SHELLY_MODEL` | `SHPRO-3EM-3CT63` | Device model string |
+| `SHELLY_MODEL` | `SPEM-003CEBEU63` | Device model string (real 3CT63 SKU) |
 | `SHELLY_FIRMWARE` | `1.4.4` | Reported firmware version |
 | `SHELLY_APP` | `Pro3EM` | mDNS / device app id |
 | `HTTP_PORT` | `80` | HTTP listen port |
