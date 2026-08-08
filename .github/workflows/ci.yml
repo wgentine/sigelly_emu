@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  docker:
+    name: Docker build and API smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t sigelly-emu:ci .
+
+      - name: Start container
+        run: |
+          docker run -d --name sigelly-emu-ci \
+            -p 8080:8080 \
+            -e ALFEN_HOST=127.0.0.1 \
+            -e ALFEN_PORT=502 \
+            -e HTTP_PORT=8080 \
+            -e MDNS_ENABLE=false \
+            -e STATE_PATH=/tmp/state.json \
+            -e SHELLY_ADVERTISE_IP=127.0.0.1 \
+            sigelly-emu:ci
+
+      - name: Wait for healthz
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
+              echo "healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container failed to become healthy"
+          docker logs sigelly-emu-ci || true
+          exit 1
+
+      - name: Shelly API compatibility checks
+        run: ./scripts/validate.sh http://127.0.0.1:8080
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f sigelly-emu-ci || true
