@@ -62,13 +62,19 @@ class MeterState:
 class EnergyStore:
     """Thread-safe meter state with Alfen energy preference + power integration."""
 
-    def __init__(self, state_path: str = "/data/state.json", save_interval_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        state_path: str = "/data/state.json",
+        save_interval_s: float = 30.0,
+        use_alfen_energy: bool = False,
+    ) -> None:
         self.state_path = Path(state_path)
         self._lock = threading.RLock()
         self.state = MeterState()
         self._last_integrate_ts: Optional[float] = None
         self._save_interval_s = save_interval_s
         self._last_save_ts: float = 0.0
+        self._use_alfen_energy_flag = use_alfen_energy
         self._load()
 
     def _load(self) -> None:
@@ -135,7 +141,7 @@ class EnergyStore:
             self.state.alfen_errors = list(m.errors)
             self.state.last_update_ts = now
 
-            if self._use_alfen_energy(m):
+            if self._should_use_alfen_energy(m):
                 self.state.energy = EnergyCounters(
                     a_total_act_energy=m.a_total_act_energy or 0.0,
                     b_total_act_energy=m.b_total_act_energy or 0.0,
@@ -168,8 +174,11 @@ class EnergyStore:
             self._last_save_ts = now
             self.save()
 
-    @staticmethod
-    def _use_alfen_energy(m: AlfenMeasurements) -> bool:
+    def _should_use_alfen_energy(self, m: AlfenMeasurements) -> bool:
+        # Default off: factory-reset Shelly starts near 0 Wh; Alfen lifetime
+        # socket energy is often millions of Wh and looks nothing like EMData.
+        if not self._use_alfen_energy_flag:
+            return False
         return any(
             v is not None and v >= 0
             for v in (

@@ -42,7 +42,14 @@ class Settings(BaseSettings):
     shelly_fw_id: str = "20260710-101221/2.0.0-g87fbfa4"
     shelly_app: str = "Pro3EM"
     shelly_sn: str = "EMU000001"
-    shelly_wifi_ssid: str = "home"
+    # Unused on eth-only Pro 3EM (factory-reset reports wifi.sta.ssid=null)
+    shelly_wifi_ssid: Optional[str] = None
+    shelly_tz: str = "Europe/Amsterdam"
+    shelly_lat: float = 52.3346
+    shelly_lon: float = 4.8914
+    # When false, EMData Wh counters are integrated from power (fresh-meter style)
+    # instead of Alfen lifetime socket energy.
+    alfen_use_energy: bool = False
 
     # Network / service
     http_port: int = 80
