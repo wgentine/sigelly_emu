@@ -127,9 +127,7 @@ async def shelly_http_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["Server"] = "ShellyHTTP/1.0.0"
     response.headers["Connection"] = "close"
-    # Real ShellyHTTP omits Date; drop uvicorn/Starlette's if present.
-    if "date" in response.headers:
-        del response.headers["date"]
+    # Real ShellyHTTP omits Date; uvicorn adds it after middleware — use --no-date-header.
     return response
 
 

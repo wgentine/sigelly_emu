@@ -40,6 +40,7 @@ proc = subprocess.Popen(
         "--port",
         port,
         "--no-server-header",
+        "--no-date-header",
     ],
     cwd=str(root),
     stdin=subprocess.DEVNULL,

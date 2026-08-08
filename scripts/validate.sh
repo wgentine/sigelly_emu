@@ -135,6 +135,41 @@ d=json.load(sys.stdin)
 assert "ok" in d, d
 '
 
+check_response_headers() {
+  info "GET /rpc/WiFi.GetStatus response headers"
+  local headers
+  if ! headers="$(curl -fsS -D - -o /dev/null --max-time 5 "$BASE_URL/rpc/WiFi.GetStatus")"; then
+    red "FAIL response headers: curl error"
+    FAIL=1
+    return
+  fi
+  local lower
+  lower="$(printf '%s' "$headers" | tr '[:upper:]' '[:lower:]')"
+  if ! printf '%s' "$lower" | grep -q '^server: shellyhttp/1.0.0'; then
+    red "FAIL response headers: expected Server: ShellyHTTP/1.0.0"
+    printf '%s\n' "$headers" | head -20
+    FAIL=1
+    return
+  fi
+  if ! printf '%s' "$lower" | grep -q '^connection: close'; then
+    red "FAIL response headers: expected Connection: close"
+    printf '%s' "$lower" | head -20
+    echo
+    FAIL=1
+    return
+  fi
+  if printf '%s' "$lower" | grep -q '^date:'; then
+    red "FAIL response headers: Date should be omitted (real ShellyHTTP)"
+    printf '%s' "$lower" | head -20
+    echo
+    FAIL=1
+    return
+  fi
+  green "OK   response headers"
+}
+
+check_response_headers
+
 if [[ "$FAIL" -ne 0 ]]; then
   red "Validation FAILED against $BASE_URL"
   exit 1
