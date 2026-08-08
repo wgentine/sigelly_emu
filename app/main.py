@@ -82,7 +82,10 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     _configure_logging(settings.log_level)
 
-    store = EnergyStore(state_path=settings.state_path)
+    store = EnergyStore(
+        state_path=settings.state_path,
+        use_alfen_energy=settings.alfen_use_energy,
+    )
     trace = RpcTrace()
     rpc = ShellyRpcHandler(settings, store, trace)
 

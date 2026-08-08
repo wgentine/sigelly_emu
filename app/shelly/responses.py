@@ -7,13 +7,43 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from app.config import Settings
 from app.state.energy import MeterState
 
 _LIST_METHODS_PATH = Path(__file__).with_name("list_methods.json")
+_CFG_REV = 8
+
+
+def _local_now(settings: Settings) -> Tuple[datetime, int]:
+    try:
+        tz = ZoneInfo(settings.shelly_tz)
+    except Exception:  # noqa: BLE001
+        tz = timezone.utc
+    now = datetime.now(tz)
+    offset = int(now.utcoffset().total_seconds()) if now.utcoffset() else 0
+    return now, offset
+
+
+def _ipv6_link_local(mac_no_colons: str) -> str:
+    """EUI-64 link-local IPv6 from MAC (matches Shelly eth.ip6 style)."""
+    mac = mac_no_colons.replace(":", "").lower()
+    if len(mac) != 12:
+        return "fe80::"
+    b = [int(mac[i : i + 2], 16) for i in range(0, 12, 2)]
+    b[0] ^= 0x02
+    eui = b[:3] + [0xFF, 0xFE] + b[3:]
+    parts = [
+        f"{(eui[0] << 8) | eui[1]:x}",
+        f"{(eui[2] << 8) | eui[3]:x}",
+        f"{(eui[4] << 8) | eui[5]:x}",
+        f"{(eui[6] << 8) | eui[7]:x}",
+    ]
+    return "fe80::" + ":".join(parts)
 
 
 def _load_list_methods() -> List[str]:
@@ -125,23 +155,22 @@ def build_em_config() -> Dict[str, Any]:
 
 
 def build_sys_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
-    now = time.time()
-    uptime = int(now - state.start_ts)
-    local = time.localtime(now)
-    utc_offset = int(time.localtime(now).tm_gmtoff) if hasattr(local, "tm_gmtoff") else 0
+    now_ts = time.time()
+    uptime = int(now_ts - state.start_ts)
+    local, utc_offset = _local_now(settings)
     return {
         "mac": settings.mac_no_colons,
         "restart_required": False,
-        "time": time.strftime("%H:%M", local),
-        "unixtime": int(now),
-        "last_sync_ts": int(state.last_update_ts) if state.last_update_ts else int(now),
+        "time": local.strftime("%H:%M"),
+        "unixtime": int(now_ts),
+        "last_sync_ts": int(state.last_update_ts) if state.last_update_ts else int(now_ts),
         "uptime": uptime,
-        "ram_size": 262776,
-        "ram_free": 147772,
-        "ram_min_free": 124868,
+        "ram_size": 262560,
+        "ram_free": 122376,
+        "ram_min_free": 85852,
         "fs_size": 524288,
-        "fs_free": 151552,
-        "cfg_rev": 1,
+        "fs_free": 155648,
+        "cfg_rev": _CFG_REV,
         "kvs_rev": 0,
         "schedule_rev": 0,
         "webhook_rev": 0,
@@ -153,11 +182,11 @@ def build_sys_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
                 "desc": "Pro 3 EM with Pro Sensor Addon",
                 "stable": {
                     "version": settings.shelly_firmware,
-                    "build_id": settings.shelly_fw_id,
+                    "build_id": "20260710-101208/2.0.0-g87fbfa4",
                 },
             }
         },
-        "reset_reason": 1,
+        "reset_reason": 3,
         "utc_offset": utc_offset,
     }
 
@@ -176,7 +205,7 @@ def build_wifi_status(settings: Settings) -> Dict[str, Any]:
 def build_eth_status(settings: Settings) -> Dict[str, Any]:
     return {
         "ip": settings.advertise_ip,
-        "ip6": [],
+        "ip6": [_ipv6_link_local(settings.mac_no_colons)],
     }
 
 
@@ -252,7 +281,7 @@ def build_get_config(settings: Settings) -> Dict[str, Any]:
     return {
         "ble": {"rpc": {"enable": False}},
         "bthome": {},
-        "cloud": {"enable": False, "server": "shelly-eu-2.shelly.cloud:6022/jrpc"},
+        "cloud": {"enable": False, "server": "iot.shelly.cloud:6012/jrpc"},
         "em:0": build_em_config(),
         "emdata:0": {},
         "eth": {
@@ -264,7 +293,7 @@ def build_get_config(settings: Settings) -> Dict[str, Any]:
             "gw": None,
             "nameserver": None,
         },
-        "modbus": {"enable": False},
+        "modbus": {"enable": True},
         "mqtt": {
             "enable": False,
             "server": None,
@@ -284,14 +313,18 @@ def build_get_config(settings: Settings) -> Dict[str, Any]:
                 "mac": mac,
                 "fw_id": settings.shelly_fw_id,
                 "discoverable": True,
-                "eco_mode": True,
+                "eco_mode": False,
                 "profile": "triphase",
                 "addon_type": None,
                 "sys_btn_toggle": True,
                 "tls_check_cert_validity_time": True,
                 "enhanced_security": False,
             },
-            "location": {"tz": "UTC", "lat": 0.0, "lon": 0.0},
+            "location": {
+                "tz": settings.shelly_tz,
+                "lat": settings.shelly_lat,
+                "lon": settings.shelly_lon,
+            },
             "debug": {
                 "level": 2,
                 "file_level": None,
@@ -300,10 +333,10 @@ def build_get_config(settings: Settings) -> Dict[str, Any]:
                 "file_log": {"enable": False},
                 "udp": {"addr": None},
             },
-            "ui_data": {"device_revision": "0-36"},
+            "ui_data": {"device_revision": f"1-{_CFG_REV}"},
             "rpc_udp": {"dst_addr": None, "listen_port": None},
             "sntp": {"server": "time.cloudflare.com"},
-            "cfg_rev": 1,
+            "cfg_rev": _CFG_REV,
         },
         "temperature:0": {
             "id": 0,
@@ -319,7 +352,7 @@ def build_get_config(settings: Settings) -> Dict[str, Any]:
                 "range_extender": {"enable": False},
             },
             "sta": {
-                "ssid": settings.shelly_wifi_ssid,
+                "ssid": settings.shelly_wifi_ssid or None,
                 "is_open": True,
                 "enable": False,
                 "ipv4mode": "dhcp",
