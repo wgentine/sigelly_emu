@@ -70,6 +70,11 @@ class Settings(BaseSettings):
         return f"shellypro3em63-{self.shelly_device_id.lower()}"
 
     @property
+    def mdns_server_hostname(self) -> str:
+        """SRV target used by real fw 2.0.0: ShellyPro3EM63-<MACUPPER>.local."""
+        return f"ShellyPro3EM63-{self.mac_no_colons}"
+
+    @property
     def mac_no_colons(self) -> str:
         return self.shelly_mac.replace(":", "").upper()
 
