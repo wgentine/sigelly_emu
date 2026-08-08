@@ -13,7 +13,7 @@ COPY app ./app
 COPY scripts ./scripts
 
 RUN mkdir -p /data \
-    && chmod +x /scripts/validate.sh
+    && chmod +x ./scripts/validate.sh
 
 ENV HTTP_PORT=80 \
     STATE_PATH=/data/state.json \
