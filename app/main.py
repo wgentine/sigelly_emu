@@ -130,12 +130,12 @@ def root() -> Dict[str, Any]:
 
 @app.get("/healthz")
 def healthz() -> JSONResponse:
-    ok = True
+    alfen_status = alfen.get_status()
     payload = {
-        "ok": ok,
-        "alfen_connected": alfen.connected,
+        "ok": True,
+        "alfen_connected": alfen_status["connected"],
         "alfen_ok": store.state.alfen_ok,
-        "poll_count": alfen.poll_count,
+        "poll_count": alfen_status["poll_count"],
         "advertise_ip": settings.advertise_ip,
     }
     return JSONResponse(payload)
@@ -225,15 +225,16 @@ def debug_page(request: Request):
     meter = store.debug_dict()
     mdns_status = mdns.status()
     rpc_summary = trace.summary()
+    alfen_status = alfen.get_status()
     alfen_info = {
         "host": settings.alfen_host,
         "port": settings.alfen_port,
         "slave_id": settings.alfen_slave_id,
-        "connected": alfen.connected,
-        "poll_count": alfen.poll_count,
-        "error_count": alfen.error_count,
-        "last_error": alfen.last_error,
-        "last_poll_ts": alfen.last_poll_ts,
+        "connected": alfen_status["connected"],
+        "poll_count": alfen_status["poll_count"],
+        "error_count": alfen_status["error_count"],
+        "last_error": alfen_status["last_error"],
+        "last_poll_ts": alfen_status["last_poll_ts"],
     }
 
     accept = request.headers.get("accept", "")
@@ -259,6 +260,7 @@ def debug_page(request: Request):
         f"<td>{'ok' if e['ok'] else 'ERR'}</td></tr>"
         for e in rpc_summary.get("recent", [])
     )
+    alfen_ok_class = "ok" if alfen_status["connected"] and meter.get("alfen_ok") else "bad"
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>sigelly_emu debug</title>
 <meta http-equiv="refresh" content="5">
@@ -276,8 +278,8 @@ pre {{ background:#1a1a1a; padding: 0.8rem; overflow:auto; }}
 · Advertise: {settings.advertise_ip}:{settings.http_port}</p>
 <h2>Alfen Modbus</h2>
 <pre>{json.dumps(alfen_info, indent=2)}</pre>
-<p class="{'ok' if alfen.connected and meter.get('alfen_ok') else 'bad'}">
-Alfen connected={alfen.connected} last_ok={meter.get('alfen_ok')}
+<p class="{alfen_ok_class}">
+Alfen connected={alfen_status["connected"]} last_ok={meter.get('alfen_ok')}
 </p>
 <h2>Live power (W)</h2>
 <pre>{json.dumps(meter.get('power'), indent=2)}</pre>
