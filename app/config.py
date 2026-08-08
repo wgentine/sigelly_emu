@@ -53,6 +53,10 @@ class Settings(BaseSettings):
 
     # Network / service
     http_port: int = 80
+    # Sigenstor reads the meter over Shelly Modbus TCP (not HTTP RPC).
+    shelly_modbus_enable: bool = True
+    shelly_modbus_port: int = 502
+    shelly_modbus_unit_id: int = 1
     shelly_advertise_ip: Optional[str] = None
     mdns_enable: bool = True
     state_path: str = "/data/state.json"
