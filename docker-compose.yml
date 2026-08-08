@@ -1,0 +1,13 @@
+services:
+  sigelly-emu:
+    build: .
+    container_name: sigelly-emu
+    # Host networking is required for mDNS multicast and Shelly-like port 80.
+    network_mode: host
+    env_file: .env
+    volumes:
+      - sigelly-data:/data
+    restart: unless-stopped
+
+volumes:
+  sigelly-data:
