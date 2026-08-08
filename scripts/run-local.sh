@@ -32,7 +32,16 @@ host = os.environ["SIGELLY_HOST"]
 port = os.environ["HTTP_PORT"]
 
 proc = subprocess.Popen(
-    [str(root / ".venv/bin/uvicorn"), "app.main:app", "--host", host, "--port", port],
+    [
+        str(root / ".venv/bin/uvicorn"),
+        "app.main:app",
+        "--host",
+        host,
+        "--port",
+        port,
+        "--no-server-header",
+        "--no-date-header",
+    ],
     cwd=str(root),
     stdin=subprocess.DEVNULL,
     stdout=log_file.open("a"),
