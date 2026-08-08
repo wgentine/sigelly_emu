@@ -15,6 +15,7 @@ from app.alfen.client import AlfenClient
 from app.config import Settings, get_settings
 from app.debug.trace import RpcTrace
 from app.shelly.mdns import ShellyMdns
+from app.shelly.modbus_server import ShellyModbusServer
 from app.shelly.rpc import ShellyRpcHandler
 from app.shelly.responses import build_shelly_http_info
 from app.state.energy import EnergyStore
@@ -26,6 +27,7 @@ settings: Settings
 store: EnergyStore
 alfen: AlfenClient
 mdns: ShellyMdns
+modbus: ShellyModbusServer
 trace: RpcTrace
 rpc: ShellyRpcHandler
 
@@ -77,7 +79,7 @@ def _parse_query_params(qp: Dict[str, Any]) -> Dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global settings, store, alfen, mdns, trace, rpc
+    global settings, store, alfen, mdns, modbus, trace, rpc
 
     settings = get_settings()
     _configure_logging(settings.log_level)
@@ -99,20 +101,32 @@ async def lifespan(app: FastAPI):
     )
     alfen.start()
 
+    modbus = ShellyModbusServer(
+        settings,
+        store,
+        port=settings.shelly_modbus_port,
+        unit_id=settings.shelly_modbus_unit_id,
+    )
+    if settings.shelly_modbus_enable:
+        modbus.start()
+
     mdns = ShellyMdns(settings)
     threading.Thread(target=_start_mdns_async, args=(mdns,), name="mdns-start", daemon=True).start()
 
     logger.info(
-        "sigelly_emu ready advertise=%s:%s device=%s alfen=%s:%s",
+        "sigelly_emu ready advertise=%s:%s device=%s alfen=%s:%s modbus=%s",
         settings.advertise_ip,
         settings.http_port,
         settings.device_hostname,
         settings.alfen_host,
         settings.alfen_port,
+        f":{settings.shelly_modbus_port}" if settings.shelly_modbus_enable else "off",
     )
     yield
 
     mdns.stop()
+    if settings.shelly_modbus_enable:
+        modbus.stop()
     alfen.stop()
     store.save()
     logger.info("sigelly_emu shutdown complete")
