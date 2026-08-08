@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
@@ -40,16 +40,61 @@ class AlfenClient:
         self.on_update = on_update
 
         self._client: Optional[ModbusTcpClient] = None
-        self._lock = threading.Lock()
+        # RLock: connect/read helpers and status updates may nest.
+        self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-        self.last: AlfenMeasurements = AlfenMeasurements()
-        self.connected: bool = False
-        self.last_poll_ts: float = 0.0
-        self.last_error: Optional[str] = None
-        self.poll_count: int = 0
-        self.error_count: int = 0
+        self._last: AlfenMeasurements = AlfenMeasurements()
+        self._connected: bool = False
+        self._last_poll_ts: float = 0.0
+        self._last_error: Optional[str] = None
+        self._poll_count: int = 0
+        self._error_count: int = 0
+
+    # --- thread-safe public status accessors (used by HTTP handlers) ---
+
+    @property
+    def last(self) -> AlfenMeasurements:
+        with self._lock:
+            return self._last
+
+    @property
+    def connected(self) -> bool:
+        with self._lock:
+            return self._connected
+
+    @property
+    def last_poll_ts(self) -> float:
+        with self._lock:
+            return self._last_poll_ts
+
+    @property
+    def last_error(self) -> Optional[str]:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def poll_count(self) -> int:
+        with self._lock:
+            return self._poll_count
+
+    @property
+    def error_count(self) -> int:
+        with self._lock:
+            return self._error_count
+
+    def get_status(self) -> Dict[str, Any]:
+        """Consistent snapshot for /healthz and /debug."""
+        with self._lock:
+            return {
+                "connected": self._connected,
+                "poll_count": self._poll_count,
+                "error_count": self._error_count,
+                "last_error": self._last_error,
+                "last_poll_ts": self._last_poll_ts,
+                "last_ok": self._last.raw_ok,
+            }
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -80,12 +125,12 @@ class AlfenClient:
                 except Exception:  # noqa: BLE001
                     pass
                 self._client = None
-            self.connected = False
+            self._connected = False
 
     def _ensure_connected(self) -> bool:
         with self._lock:
             if self._client and self._client.connected:
-                self.connected = True
+                self._connected = True
                 return True
             if self._client:
                 try:
@@ -98,9 +143,9 @@ class AlfenClient:
                 timeout=self.connect_timeout,
             )
             ok = bool(self._client.connect())
-            self.connected = ok
+            self._connected = ok
             if not ok:
-                self.last_error = f"connect_failed:{self.host}:{self.port}"
+                self._last_error = f"connect_failed:{self.host}:{self.port}"
                 logger.warning("Failed to connect to Alfen at %s:%s", self.host, self.port)
             else:
                 logger.info("Connected to Alfen Modbus at %s:%s", self.host, self.port)
@@ -124,51 +169,56 @@ class AlfenClient:
                     slave=self.slave_id,
                 )
             except ModbusException as exc:
-                self.last_error = str(exc)
+                self._last_error = str(exc)
                 return None
 
-        if result is None or (hasattr(result, "isError") and result.isError()):
-            self.last_error = f"modbus_error:{result!r}"
-            return None
-        regs = getattr(result, "registers", None)
-        if not regs:
-            self.last_error = "empty_registers"
-            return None
-        return list(regs)
+            if result is None or (hasattr(result, "isError") and result.isError()):
+                self._last_error = f"modbus_error:{result!r}"
+                return None
+            regs = getattr(result, "registers", None)
+            if not regs:
+                self._last_error = "empty_registers"
+                return None
+            return list(regs)
 
     def poll_once(self) -> AlfenMeasurements:
         """Perform a single poll; retain last-good values on failure."""
         if not self._ensure_connected():
-            self.error_count += 1
-            failed = AlfenMeasurements(
-                raw_ok=False,
-                errors=[self.last_error or "not_connected"],
-            )
-            # Preserve last good instantaneous values for Shelly consumers
-            if self.last.raw_ok or self.poll_count > 0:
-                failed = self._merge_keep_last(failed)
-            self.last = failed
-            return failed
+            with self._lock:
+                self._error_count += 1
+                failed = AlfenMeasurements(
+                    raw_ok=False,
+                    errors=[self._last_error or "not_connected"],
+                )
+                if self._last.raw_ok or self._poll_count > 0:
+                    failed = self._merge_keep_last_locked(failed)
+                self._last = failed
+                return failed
 
         regs = self._read_holding()
         if regs is None:
-            self.error_count += 1
-            self.connected = False
+            with self._lock:
+                self._error_count += 1
+                self._connected = False
             self._close()
-            failed = AlfenMeasurements(
-                raw_ok=False,
-                errors=[self.last_error or "read_failed"],
-            )
-            if self.last.raw_ok or self.poll_count > 0:
-                failed = self._merge_keep_last(failed)
-            self.last = failed
-            return failed
+            with self._lock:
+                failed = AlfenMeasurements(
+                    raw_ok=False,
+                    errors=[self._last_error or "read_failed"],
+                )
+                if self._last.raw_ok or self._poll_count > 0:
+                    failed = self._merge_keep_last_locked(failed)
+                self._last = failed
+                return failed
 
         parsed = parse_registers(regs)
-        self.last = parsed
-        self.last_poll_ts = time.time()
-        self.poll_count += 1
-        self.last_error = None if parsed.raw_ok else (parsed.errors[0] if parsed.errors else "parse_error")
+        with self._lock:
+            self._last = parsed
+            self._last_poll_ts = time.time()
+            self._poll_count += 1
+            self._last_error = (
+                None if parsed.raw_ok else (parsed.errors[0] if parsed.errors else "parse_error")
+            )
         if self.on_update:
             try:
                 self.on_update(parsed)
@@ -176,10 +226,13 @@ class AlfenClient:
                 logger.exception("on_update callback failed")
         return parsed
 
-    def _merge_keep_last(self, failed: AlfenMeasurements) -> AlfenMeasurements:
-        """Keep previous numeric snapshot but mark raw_ok False with errors."""
-        prev = self.last
-        keep = AlfenMeasurements(
+    def _merge_keep_last_locked(self, failed: AlfenMeasurements) -> AlfenMeasurements:
+        """Keep previous numeric snapshot but mark raw_ok False with errors.
+
+        Caller must hold self._lock.
+        """
+        prev = self._last
+        return AlfenMeasurements(
             a_voltage=prev.a_voltage,
             b_voltage=prev.b_voltage,
             c_voltage=prev.c_voltage,
@@ -210,7 +263,6 @@ class AlfenClient:
             raw_ok=False,
             errors=failed.errors,
         )
-        return keep
 
     def _loop(self) -> None:
         backoff = self.poll_interval
@@ -231,7 +283,8 @@ class AlfenClient:
                     backoff = min(backoff * 1.5, 30.0)
                     logger.warning("Alfen poll failed: %s", result.errors)
             except Exception:  # noqa: BLE001
-                self.error_count += 1
+                with self._lock:
+                    self._error_count += 1
                 backoff = min(backoff * 1.5, 30.0)
                 logger.exception("Alfen poll exception")
             elapsed = time.monotonic() - started
