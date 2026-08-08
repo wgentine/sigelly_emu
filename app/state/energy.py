@@ -62,11 +62,13 @@ class MeterState:
 class EnergyStore:
     """Thread-safe meter state with Alfen energy preference + power integration."""
 
-    def __init__(self, state_path: str = "/data/state.json") -> None:
+    def __init__(self, state_path: str = "/data/state.json", save_interval_s: float = 30.0) -> None:
         self.state_path = Path(state_path)
         self._lock = threading.RLock()
         self.state = MeterState()
         self._last_integrate_ts: Optional[float] = None
+        self._save_interval_s = save_interval_s
+        self._last_save_ts: float = 0.0
         self._load()
 
     def _load(self) -> None:
@@ -161,8 +163,10 @@ class EnergyStore:
             else:
                 self._integrate_locked(now)
 
-        # Persist periodically (every update is fine; volume is tiny)
-        self.save()
+        # Persist on an interval so a slow/hung filesystem cannot stall Modbus polling.
+        if now - self._last_save_ts >= self._save_interval_s:
+            self._last_save_ts = now
+            self.save()
 
     @staticmethod
     def _use_alfen_energy(m: AlfenMeasurements) -> bool:

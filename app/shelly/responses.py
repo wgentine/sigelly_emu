@@ -1,26 +1,52 @@
-"""Build Shelly Gen2 Pro 3EM-3CT63 response payloads from meter state."""
+"""Build Shelly Gen2 Pro 3EM-3CT63 response payloads from meter state.
+
+Shapes are aligned to a real SPEM-003CEBEU63 (fw 2.0.0) capture.
+"""
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
 from app.state.energy import MeterState
 
+_LIST_METHODS_PATH = Path(__file__).with_name("list_methods.json")
 
-SUPPORTED_METHODS: List[str] = [
-    "Shelly.GetDeviceInfo",
-    "Shelly.GetStatus",
-    "Shelly.GetConfig",
-    "Shelly.ListMethods",
-    "EM.GetStatus",
-    "EM.GetConfig",
-    "EMData.GetStatus",
-    "EMData.GetConfig",
-    "Wifi.GetStatus",
-    "Sys.GetStatus",
-]
+
+def _load_list_methods() -> List[str]:
+    try:
+        data = json.loads(_LIST_METHODS_PATH.read_text(encoding="utf-8"))
+        methods = data.get("methods")
+        if isinstance(methods, list) and methods:
+            return [str(m) for m in methods]
+    except Exception:  # noqa: BLE001
+        pass
+    return [
+        "Shelly.GetDeviceInfo",
+        "Shelly.GetStatus",
+        "Shelly.GetConfig",
+        "Shelly.ListMethods",
+        "Shelly.GetComponents",
+        "EM.GetStatus",
+        "EM.GetConfig",
+        "EMData.GetStatus",
+        "EMData.GetConfig",
+        "Wifi.GetStatus",
+        "Sys.GetStatus",
+        "Eth.GetStatus",
+        "Cloud.GetStatus",
+        "Mqtt.GetStatus",
+        "WS.GetStatus",
+        "BLE.GetStatus",
+        "Modbus.GetStatus",
+        "Temperature.GetStatus",
+    ]
+
+
+SUPPORTED_METHODS: List[str] = _load_list_methods()
 
 
 def _r(value: float, digits: int = 3) -> float:
@@ -29,6 +55,12 @@ def _r(value: float, digits: int = 3) -> float:
 
 def _r2(value: float) -> float:
     return round(float(value), 2)
+
+
+def _phase_alarms() -> Dict[str, Any]:
+    empty = [None, None]
+    phase = {"voltage": empty, "current": empty, "power": empty}
+    return {"a": dict(phase), "b": dict(phase), "c": dict(phase)}
 
 
 def build_em_status(state: MeterState) -> Dict[str, Any]:
@@ -79,10 +111,24 @@ def build_emdata_status(state: MeterState) -> Dict[str, Any]:
     }
 
 
+def build_em_config() -> Dict[str, Any]:
+    return {
+        "id": 0,
+        "name": None,
+        "blink_mode_selector": "active_energy",
+        "phase_selector": "all",
+        "monitor_phase_sequence": False,
+        "ct_type": "3x63A",
+        "reverse": {},
+        "alarms": _phase_alarms(),
+    }
+
+
 def build_sys_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
     now = time.time()
     uptime = int(now - state.start_ts)
     local = time.localtime(now)
+    utc_offset = int(time.localtime(now).tm_gmtoff) if hasattr(local, "tm_gmtoff") else 0
     return {
         "mac": settings.mac_no_colons,
         "restart_required": False,
@@ -90,50 +136,97 @@ def build_sys_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
         "unixtime": int(now),
         "last_sync_ts": int(state.last_update_ts) if state.last_update_ts else int(now),
         "uptime": uptime,
-        "ram_size": 247868,
-        "ram_free": 126504,
-        "ram_min_free": 108024,
+        "ram_size": 262776,
+        "ram_free": 147772,
+        "ram_min_free": 124868,
         "fs_size": 524288,
-        "fs_free": 188416,
+        "fs_free": 151552,
         "cfg_rev": 1,
         "kvs_rev": 0,
         "schedule_rev": 0,
         "webhook_rev": 0,
+        "btrelay_rev": 0,
         "available_updates": {},
+        "alt": {
+            "Pro3EMProAddon": {
+                "name": "Shelly Pro 3 EM",
+                "desc": "Pro 3 EM with Pro Sensor Addon",
+                "stable": {
+                    "version": settings.shelly_firmware,
+                    "build_id": settings.shelly_fw_id,
+                },
+            }
+        },
         "reset_reason": 1,
+        "utc_offset": utc_offset,
     }
 
 
 def build_wifi_status(settings: Settings) -> Dict[str, Any]:
+    # Real Pro 3EM-3CT63 on Ethernet reports wifi disconnected.
+    _ = settings
     return {
-        "sta_ip": settings.advertise_ip,
-        "status": "got ip",
-        "ssid": settings.shelly_wifi_ssid,
-        "rssi": -50,
+        "sta_ip": "0.0.0.0",
+        "status": "disconnected",
+        "ssid": None,
+        "sta_ip6": None,
     }
+
+
+def build_eth_status(settings: Settings) -> Dict[str, Any]:
+    return {
+        "ip": settings.advertise_ip,
+        "ip6": [],
+    }
+
+
+def build_temperature_status() -> Dict[str, Any]:
+    return {"id": 0, "tC": 45.0, "tF": 113.0}
+
+
+def build_cloud_status() -> Dict[str, Any]:
+    return {"connected": False}
+
+
+def build_mqtt_status() -> Dict[str, Any]:
+    return {"connected": False}
+
+
+def build_ws_status() -> Dict[str, Any]:
+    return {"connected": False}
+
+
+def build_ble_status() -> Dict[str, Any]:
+    return {}
+
+
+def build_modbus_status() -> Dict[str, Any]:
+    return {}
 
 
 def build_full_status(settings: Settings, state: MeterState) -> Dict[str, Any]:
     return {
-        "ble": {},
-        "bthome": {"errors": ["bluetooth_disabled"]},
-        "cloud": {"connected": False},
+        "ble": build_ble_status(),
+        "bthome": {},
+        "cloud": build_cloud_status(),
         "em:0": build_em_status(state),
         "emdata:0": build_emdata_status(state),
-        "eth": {"ip": settings.advertise_ip},
-        "modbus": {},
-        "mqtt": {"connected": False},
+        "eth": build_eth_status(settings),
+        "modbus": build_modbus_status(),
+        "mqtt": build_mqtt_status(),
         "sys": build_sys_status(settings, state),
-        "temperature:0": {"id": 0, "tC": 35.0, "tF": 95.0},
+        "temperature:0": build_temperature_status(),
         "wifi": build_wifi_status(settings),
-        "ws": {"connected": False},
+        "ws": build_ws_status(),
     }
 
 
 def build_device_info(settings: Settings) -> Dict[str, Any]:
     return {
+        "name": None,
         "id": settings.device_hostname,
         "mac": settings.mac_no_colons,
+        "slot": 1,
         "model": settings.shelly_model,
         "gen": 2,
         "fw_id": settings.shelly_fw_id,
@@ -141,82 +234,155 @@ def build_device_info(settings: Settings) -> Dict[str, Any]:
         "app": settings.shelly_app,
         "auth_en": False,
         "auth_domain": None,
-        "discoverable": True,
+        "profile": "triphase",
+        "provision": "complete",
+        "enhanced_security": False,
     }
 
 
 def build_shelly_http_info(settings: Settings, state: MeterState) -> Dict[str, Any]:
-    info = build_device_info(settings)
-    info.update(
-        {
-            "name": settings.device_hostname,
-            "sn": settings.shelly_sn,
-            "manufacturer": "Allterco Robotics",
-            "uptime": int(time.time() - state.start_ts),
-            "wifi_sta": {"connected": True},
-            "eth": {"connected": True},
-        }
-    )
-    return info
+    # GET /shelly matches Shelly.GetDeviceInfo on fw 2.0.0 Pro 3EM-3CT63.
+    _ = state
+    return build_device_info(settings)
 
 
 def build_get_config(settings: Settings) -> Dict[str, Any]:
+    mac = settings.mac_no_colons
+    host = settings.device_hostname
     return {
-        "ble": {"enable": False},
+        "ble": {"rpc": {"enable": False}},
         "bthome": {},
         "cloud": {"enable": False, "server": "shelly-eu-2.shelly.cloud:6022/jrpc"},
-        "em:0": {
-            "id": 0,
-            "name": None,
-            "blink_mode_selector": "active_energy",
-            "phase_selector": "a",
-            "monitor_phase_sequence": True,
-            "ct_range": "63A",
-        },
+        "em:0": build_em_config(),
         "emdata:0": {},
-        "eth": {"enable": True},
+        "eth": {
+            "enable": True,
+            "server_mode": False,
+            "ipv4mode": "dhcp",
+            "ip": None,
+            "netmask": None,
+            "gw": None,
+            "nameserver": None,
+        },
         "modbus": {"enable": False},
-        "mqtt": {"enable": False},
+        "mqtt": {
+            "enable": False,
+            "server": None,
+            "client_id": host,
+            "user": None,
+            "ssl_ca": None,
+            "topic_prefix": host,
+            "rpc_ntf": True,
+            "status_ntf": False,
+            "use_client_cert": False,
+            "enable_rpc": True,
+            "enable_control": True,
+        },
         "sys": {
             "device": {
-                "name": settings.device_hostname,
-                "mac": settings.mac_no_colons,
+                "name": None,
+                "mac": mac,
                 "fw_id": settings.shelly_fw_id,
                 "discoverable": True,
-                "eco_mode": False,
+                "eco_mode": True,
+                "profile": "triphase",
+                "addon_type": None,
+                "sys_btn_toggle": True,
+                "tls_check_cert_validity_time": True,
+                "enhanced_security": False,
             },
-            "location": {"tz": None, "lat": None, "lon": None},
-            "debug": {"mqtt": {"enable": False}, "websocket": {"enable": False}, "udp": None},
-            "ui_data": {},
+            "location": {"tz": "UTC", "lat": 0.0, "lon": 0.0},
+            "debug": {
+                "level": 2,
+                "file_level": None,
+                "mqtt": {"enable": False},
+                "websocket": {"enable": False},
+                "file_log": {"enable": False},
+                "udp": {"addr": None},
+            },
+            "ui_data": {"device_revision": "0-36"},
             "rpc_udp": {"dst_addr": None, "listen_port": None},
-            "sntp": {"server": "time.google.com"},
+            "sntp": {"server": "time.cloudflare.com"},
             "cfg_rev": 1,
         },
+        "temperature:0": {
+            "id": 0,
+            "name": None,
+            "report_thr_C": 5.0,
+            "offset_C": 0.0,
+        },
         "wifi": {
-            "ap": {"ssid": f"{settings.device_hostname}-ap", "is_open": True, "enable": False},
+            "ap": {
+                "ssid": f"ShellyPro3EM63-{mac}",
+                "is_open": True,
+                "enable": False,
+                "range_extender": {"enable": False},
+            },
             "sta": {
                 "ssid": settings.shelly_wifi_ssid,
-                "is_open": False,
-                "enable": True,
+                "is_open": True,
+                "enable": False,
                 "ipv4mode": "dhcp",
-                "ip": settings.advertise_ip,
+                "ip": None,
+                "netmask": None,
+                "gw": None,
+                "nameserver": None,
             },
-            "sta1": {"ssid": None, "is_open": True, "enable": False},
+            "sta1": {
+                "ssid": None,
+                "is_open": True,
+                "enable": False,
+                "ipv4mode": "dhcp",
+                "ip": None,
+                "netmask": None,
+                "gw": None,
+                "nameserver": None,
+            },
+            "roam": {"rssi_thr": -80, "interval": 60},
         },
-        "ws": {"enable": False, "server": None, "ssl_ca": "*"},
+        "ws": {"enable": False, "server": None, "ssl_ca": "ca.pem"},
     }
 
 
-def build_em_config() -> Dict[str, Any]:
-    return {
-        "id": 0,
-        "name": None,
-        "blink_mode_selector": "active_energy",
-        "phase_selector": "a",
-        "monitor_phase_sequence": True,
-        "ct_range": "63A",
-        "ct_type": [63, 63, 63],
-    }
+def build_get_components(
+    settings: Settings,
+    state: MeterState,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    params = params or {}
+    include = params.get("include") or []
+    if isinstance(include, str):
+        include = [include]
+    want_status = not include or "status" in include
+    want_config = "config" in include
+
+    full_status = build_full_status(settings, state)
+    full_config = build_get_config(settings)
+
+    keys = [
+        "ble",
+        "bthome",
+        "cloud",
+        "em:0",
+        "emdata:0",
+        "eth",
+        "modbus",
+        "mqtt",
+        "sys",
+        "temperature:0",
+        "wifi",
+        "ws",
+    ]
+    components: List[Dict[str, Any]] = []
+    for key in keys:
+        item: Dict[str, Any] = {"key": key}
+        if want_status:
+            item["status"] = full_status.get(key, {})
+        if want_config:
+            item["config"] = full_config.get(key, {})
+        components.append(item)
+
+    return {"components": components, "cfg_rev": 1, "offset": 0, "total": len(components)}
 
 
 def dispatch_method(
@@ -226,15 +392,29 @@ def dispatch_method(
     params: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Dispatch a Shelly RPC method; raise KeyError for unknown methods."""
-    _ = params  # currently unused; reserved for id filtering
-    if method in ("Shelly.GetDeviceInfo", "GetDeviceInfo"):
+    params = params or {}
+    aliases = {
+        "GetDeviceInfo": "Shelly.GetDeviceInfo",
+        "GetStatus": "Shelly.GetStatus",
+        "GetConfig": "Shelly.GetConfig",
+        "WiFi.GetStatus": "Wifi.GetStatus",
+        "MQTT.GetStatus": "Mqtt.GetStatus",
+        "Mqtt.GetStatus": "Mqtt.GetStatus",
+        "Ws.GetStatus": "WS.GetStatus",
+        "Ble.GetStatus": "BLE.GetStatus",
+    }
+    method = aliases.get(method, method)
+
+    if method == "Shelly.GetDeviceInfo":
         return build_device_info(settings)
-    if method in ("Shelly.GetStatus", "GetStatus"):
+    if method == "Shelly.GetStatus":
         return build_full_status(settings, state)
-    if method in ("Shelly.GetConfig", "GetConfig"):
+    if method == "Shelly.GetConfig":
         return build_get_config(settings)
     if method == "Shelly.ListMethods":
         return {"methods": list(SUPPORTED_METHODS)}
+    if method == "Shelly.GetComponents":
+        return build_get_components(settings, state, params)
     if method == "EM.GetStatus":
         return build_em_status(state)
     if method == "EM.GetConfig":
@@ -247,4 +427,18 @@ def dispatch_method(
         return build_wifi_status(settings)
     if method == "Sys.GetStatus":
         return build_sys_status(settings, state)
+    if method == "Eth.GetStatus":
+        return build_eth_status(settings)
+    if method == "Cloud.GetStatus":
+        return build_cloud_status()
+    if method == "Mqtt.GetStatus":
+        return build_mqtt_status()
+    if method == "WS.GetStatus":
+        return build_ws_status()
+    if method == "BLE.GetStatus":
+        return build_ble_status()
+    if method == "Modbus.GetStatus":
+        return build_modbus_status()
+    if method == "Temperature.GetStatus":
+        return build_temperature_status()
     raise KeyError(method)

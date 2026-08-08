@@ -68,6 +68,32 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertAlmostEqual(m.total_act_power, 2300.0, places=1)
         self.assertAlmostEqual(m.a_total_act_energy or 0.0, 100.5, places=1)
 
+    def test_synthesize_phase_power_from_total_and_current(self) -> None:
+        """Alfen often publishes sum power + L1 current with phase power = 0xFFFF."""
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(306, 229.0)
+        put_f32(308, 229.0)
+        put_f32(310, 232.0)
+        put_f32(320, 6.0)
+        put_f32(322, 0.0)
+        put_f32(324, 0.0)
+        put_f32(336, 50.1)
+        put_f32(344, 1380.0)
+
+        m = parse_registers(regs)
+        self.assertTrue(m.raw_ok)
+        self.assertAlmostEqual(m.total_act_power, 1380.0, places=1)
+        self.assertAlmostEqual(m.a_act_power, 1380.0, places=1)
+        self.assertAlmostEqual(m.b_act_power, 0.0, places=1)
+        self.assertAlmostEqual(m.c_act_power, 0.0, places=1)
+        self.assertGreater(m.a_aprt_power, 0.0)
+        self.assertGreater(m.a_pf, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

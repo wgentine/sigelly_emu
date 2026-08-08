@@ -34,12 +34,12 @@ class Settings(BaseSettings):
     alfen_poll_interval: float = 2.0
     alfen_connect_timeout: float = 3.0
 
-    # Shelly identity
+    # Shelly identity (defaults match real Pro 3EM-3CT63 / SPEM-003CEBEU63)
     shelly_device_id: str = "349454112233"
     shelly_mac: str = "34:94:54:11:22:33"
-    shelly_model: str = "SHPRO-3EM-3CT63"
-    shelly_firmware: str = "1.4.4"
-    shelly_fw_id: str = "20241001-000000/v1.4.4@emu"
+    shelly_model: str = "SPEM-003CEBEU63"
+    shelly_firmware: str = "2.0.0"
+    shelly_fw_id: str = "20260710-101221/2.0.0-g87fbfa4"
     shelly_app: str = "Pro3EM"
     shelly_sn: str = "EMU000001"
     shelly_wifi_ssid: str = "home"
@@ -59,7 +59,8 @@ class Settings(BaseSettings):
 
     @property
     def device_hostname(self) -> str:
-        return f"shellypro3em-{self.shelly_device_id}"
+        # Real 3CT63 uses shellypro3em63-<mac_lower> (not shellypro3em-).
+        return f"shellypro3em63-{self.shelly_device_id.lower()}"
 
     @property
     def mac_no_colons(self) -> str:
