@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Shelly-wire-accurate HTTP/1.1 (+ WebSocket /rpc) server.
 
 Uvicorn lowercases response headers; real ShellyHTTP/1.0.0 sends Title-Case

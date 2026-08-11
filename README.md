@@ -190,3 +190,13 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 | Power always 0 | Alfen Modbus enabled? `ALFEN_HOST` reachable? `/debug` Alfen section |
 | Nonsense power values | Byte order / Modbus map — compare Alfen UI vs `/rpc/EM.GetStatus` |
 | Port 80/502 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind privileged ports |
+
+## License
+
+Copyright © 2026 W. Gentine
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+You may use, modify, and distribute this software under the terms of AGPL-3.0.
+If you modify this software and make it available over a network, you must
+provide source code to users of that service.

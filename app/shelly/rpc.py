@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Shelly Gen2 JSON-RPC request handling (POST envelope + GET bare result)."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Modbus TCP client that polls Alfen Eve Pro socket measurements."""
 
 from __future__ import annotations
