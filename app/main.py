@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Shelly Pro 3EM-3CT63 emulator backed by Alfen Eve Pro Modbus TCP."""
 
 from __future__ import annotations

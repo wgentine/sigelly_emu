@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Build Shelly Gen2 Pro 3EM-3CT63 response payloads from meter state.
 
 Shapes are aligned to a real SPEM-003CEBEU63 (fw 2.0.0) capture.

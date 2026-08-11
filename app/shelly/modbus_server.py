@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 W. Gentine
 """Shelly Gen2 EM/EMData Modbus TCP slave (port 502).
 
 Sigenstor polls the physical Pro 3EM over Modbus TCP, not HTTP RPC.
