@@ -38,11 +38,14 @@ Publish **both** TCP **80** and **502** to the LAN (host/macvlan networking). Po
 # or: ./scripts/validate.sh http://<advertise-ip>
 ```
 
-4. Confirm Modbus (optional):
+4. Confirm Modbus (optional, same path Sigen uses after enroll):
 
 ```bash
-# Phase A voltage @ input register 1020 (Shelly doc addr 31020)
-# Use any unit id; Sigen uses 7.
+# Phase A voltage @ input register 1020 (Shelly doc addr 31020); unit id 7 like mySigen
+python3 scripts/modbus_smoke.py --host 127.0.0.1 --port 502 --unit 7
+
+# Or with mbpoll (if installed):
+# mbpoll -a 7 -r 1020 -c 2 -t 3:int -1 127.0.0.1 -p 502
 ```
 
 5. Open diagnostics while pairing:
@@ -91,7 +94,13 @@ In **ACE Service Installer**:
 | `SHELLY_MAC` | `34:94:54:11:22:33` | Reported MAC |
 | `SHELLY_MODEL` | `SPEM-003CEBEU63` | Device model string (real 3CT63 SKU) |
 | `SHELLY_FIRMWARE` | `2.0.0` | Reported firmware version |
+| `SHELLY_FW_ID` | `20260710-101221/2.0.0-g87fbfa4` | Full firmware build id (`fw_id` in RPC) |
+| `SHELLY_SN` | `EMU000001` | Serial string in `Sys.GetStatus` |
 | `SHELLY_APP` | `Pro3EM` | mDNS / device app id |
+| `SHELLY_WIFI_SSID` | *(empty)* | WiFi SSID if emulating WiFi client; empty = eth-only |
+| `SHELLY_TZ` | `Europe/Amsterdam` | Timezone for `Sys.GetStatus` |
+| `SHELLY_LAT` / `SHELLY_LON` | `52.3346` / `4.8914` | Location in `Sys.GetConfig` |
+| `ALFEN_USE_ENERGY` | `false` | `true` = Alfen lifetime Wh; `false` = integrate from power |
 | `HTTP_PORT` | `80` | HTTP listen port |
 | `SHELLY_MODBUS_ENABLE` | `true` | Expose Shelly Modbus TCP for Sigenstor |
 | `SHELLY_MODBUS_PORT` | `502` | Shelly Modbus listen port |
@@ -116,10 +125,23 @@ In **ACE Service Installer**:
 
 `Shelly.GetDeviceInfo`, `Shelly.GetStatus`, `Shelly.GetConfig`, `Shelly.ListMethods`, `EM.GetStatus`, `EM.GetConfig`, `EMData.GetStatus`, `EMData.GetConfig`, `Wifi.GetStatus`, `Sys.GetStatus`
 
-## Local run (without Docker)
+## Compare against a real Shelly (optional)
+
+To diff HTTP/RPC JSON against a physical Pro 3EM-3CT63 on your LAN:
 
 ```bash
-python3 -m venv .venv
+./scripts/compare_shelly.sh http://<real-shelly-ip> http://127.0.0.1:8080
+# Report under /tmp/shelly_compare/report.txt
+```
+
+Re-run after Shelly firmware or mySigen updates if pairing behavior changes; adjust `SHELLY_*` identity env vars only when captures diverge.
+
+## Local run (without Docker)
+
+Requires **Python 3.13+** (matches the Docker image).
+
+```bash
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -130,6 +152,9 @@ python -m app.wire_server
 ```
 
 `uvicorn app.main:app` remains available for HTTP-only debugging; production uses `app.wire_server`.
+
+The published Docker image runs as a non-root `app` user. Binding ports **80** and **502** still requires `cap_add: [NET_BIND_SERVICE]` in Compose (included by default).
+
 ## Sigenstor / mySigen pairing
 
 1. Run `./scripts/validate.sh` successfully first.
@@ -155,6 +180,7 @@ services:
     image: ghcr.io/wgentine/sigelly_emu:${SIGELLY_TAG:-latest}
     ports:
       - "80:80"
+      - "502:502"
     cap_add:
       - NET_BIND_SERVICE
     environment:
@@ -190,6 +216,10 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 | Power always 0 | Alfen Modbus enabled? `ALFEN_HOST` reachable? `/debug` Alfen section |
 | Nonsense power values | Byte order / Modbus map — compare Alfen UI vs `/rpc/EM.GetStatus` |
 | Port 80/502 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind privileged ports |
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes. Python dependencies are pinned in `requirements.txt`; Dependabot opens weekly update PRs.
 
 ## License
 
