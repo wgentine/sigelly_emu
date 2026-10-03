@@ -67,7 +67,7 @@ SIGELLY_TAG=0.1.0 docker compose up -d
 Or run without Compose:
 
 ```bash
-docker run --rm --network host --env-file .env \
+docker run --rm --network host --cap-add=NET_BIND_SERVICE --env-file .env \
   -v sigelly-data:/data \
   ghcr.io/wgentine/sigelly_emu:latest
 ```
@@ -153,7 +153,7 @@ python -m app.wire_server
 
 `uvicorn app.main:app` remains available for HTTP-only debugging; production uses `app.wire_server`.
 
-The published Docker image runs as a non-root `app` user. Binding ports **80** and **502** still requires `cap_add: [NET_BIND_SERVICE]` in Compose (included by default).
+The published Docker image runs as a non-root `app` user. Binding ports **80** and **502** still requires `NET_BIND_SERVICE` (`cap_add` in Compose, or `--cap-add=NET_BIND_SERVICE` for `docker run`; included by default in Compose).
 
 ## Sigenstor / mySigen pairing
 
