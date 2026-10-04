@@ -1,6 +1,7 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.27.0
-pymodbus>=3.6.0
-zeroconf>=0.131.0
-pydantic>=2.6.0
-pydantic-settings>=2.2.0
+# Pinned for reproducible Docker/CI builds; bump via Dependabot or release prep.
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+pymodbus==3.15.0
+zeroconf==0.151.5
+pydantic==2.13.5
+pydantic-settings==2.15.0

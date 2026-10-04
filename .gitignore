@@ -6,5 +6,4 @@ __pycache__/
 venv/
 data/state.json
 .DS_Store
-.pytest_cache/
 .mypy_cache/

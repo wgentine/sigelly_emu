@@ -14,10 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.13
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
@@ -41,12 +41,15 @@ jobs:
         run: |
           docker run -d --name sigelly-emu-ci \
             -p 8080:8080 \
+            -p 5502:5502 \
             -e ALFEN_HOST=127.0.0.1 \
             -e ALFEN_PORT=502 \
             -e HTTP_PORT=8080 \
             -e MDNS_ENABLE=false \
             -e STATE_PATH=/tmp/state.json \
             -e SHELLY_ADVERTISE_IP=127.0.0.1 \
+            -e SHELLY_MODBUS_ENABLE=true \
+            -e SHELLY_MODBUS_PORT=5502 \
             sigelly-emu:ci
 
       - name: Wait for healthz
@@ -64,6 +67,9 @@ jobs:
 
       - name: Shelly API compatibility checks
         run: ./scripts/validate.sh http://127.0.0.1:8080
+
+      - name: Shelly Modbus smoke test
+        run: python3 scripts/modbus_smoke.py --host 127.0.0.1 --port 5502 --unit 7
 
       - name: Stop container
         if: always()
