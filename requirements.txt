@@ -1,5 +1,5 @@
 # Pinned for reproducible Docker/CI builds; bump via Dependabot or release prep.
-fastapi==0.142.2
+fastapi==0.159.1
 uvicorn[standard]==0.54.0
 pymodbus==3.15.0
 zeroconf==0.151.5
