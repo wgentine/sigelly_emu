@@ -4,4 +4,4 @@ uvicorn[standard]==0.54.0
 pymodbus==3.15.0
 zeroconf==0.151.5
 pydantic==2.13.5
-pydantic-settings==2.15.0
+pydantic-settings==2.16.2
