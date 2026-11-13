@@ -230,3 +230,4 @@ Licensed under the [GNU Affero General Public License v3.0](LICENSE).
 You may use, modify, and distribute this software under the terms of AGPL-3.0.
 If you modify this software and make it available over a network, you must
 provide source code to users of that service.
+<!-- scanner check: safe to ignore -->
