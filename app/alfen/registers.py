@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -63,7 +64,7 @@ def decode_float32(regs: List[int], offset: int) -> Optional[float]:
         return None
     raw = struct.pack(">HH", chunk[0] & 0xFFFF, chunk[1] & 0xFFFF)
     value = struct.unpack(">f", raw)[0]
-    if value != value:  # NaN
+    if not math.isfinite(value):
         return None
     return float(value)
 
@@ -81,7 +82,7 @@ def decode_float64(regs: List[int], offset: int) -> Optional[float]:
         chunk[3] & 0xFFFF,
     )
     value = struct.unpack(">d", raw)[0]
-    if value != value:
+    if not math.isfinite(value):
         return None
     return float(value)
 
@@ -155,6 +156,33 @@ def _fill_power_factor(m: AlfenMeasurements) -> None:
     m.c_pf = _pf(m.c_act_power, m.c_voltage, m.c_current, m.c_pf)
 
 
+def _validate_register_encoding(regs: List[int]) -> Optional[str]:
+    """Reject blocks that carry non-finite floats (NaN/inf), not Alfen 0xFFFF sentinels."""
+    for off in range(0, REGISTER_COUNT - 1, 2):
+        chunk = regs[off : off + 2]
+        if _is_nan_regs(chunk):
+            continue
+        raw = struct.pack(">HH", chunk[0] & 0xFFFF, chunk[1] & 0xFFFF)
+        if not math.isfinite(struct.unpack(">f", raw)[0]):
+            return f"invalid_float32:{REGISTER_START + off}"
+
+    for addr in (362, 366, 370, 374, 378, 382, 386, 390):
+        off = addr - REGISTER_START
+        chunk = regs[off : off + 4]
+        if len(chunk) < 4 or all(r == 0xFFFF for r in chunk):
+            continue
+        raw = struct.pack(
+            ">HHHH",
+            chunk[0] & 0xFFFF,
+            chunk[1] & 0xFFFF,
+            chunk[2] & 0xFFFF,
+            chunk[3] & 0xFFFF,
+        )
+        if not math.isfinite(struct.unpack(">d", raw)[0]):
+            return f"invalid_float64:{addr}"
+    return None
+
+
 def parse_registers(regs: List[int]) -> AlfenMeasurements:
     """Parse a contiguous register block starting at 306 into measurements."""
     if len(regs) < REGISTER_COUNT:
@@ -162,6 +190,10 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
             raw_ok=False,
             errors=[f"short_read: got {len(regs)} expected {REGISTER_COUNT}"],
         )
+
+    encoding_error = _validate_register_encoding(regs)
+    if encoding_error is not None:
+        return AlfenMeasurements(raw_ok=False, errors=[encoding_error])
 
     m = AlfenMeasurements(raw_ok=True)
 
