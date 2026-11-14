@@ -79,6 +79,46 @@ class ModbusPduTests(unittest.TestCase):
             resp = self.server._handle_pdu(unit, pdu)
             self.assertEqual(resp[0], 0x04, msg=f"unit {unit}")
 
+    def test_phase_powers_export_and_identity(self) -> None:
+        state = MeterState(
+            a_act_power=100.0,
+            b_act_power=-50.0,
+            c_act_power=25.0,
+            b_voltage=231.2,
+            c_voltage=229.4,
+            last_update_ts=1_700_000_000.0,
+        )
+        state.energy.total_act_ret = 55.25
+        state.energy.b_total_act_energy = 12.5
+        reg_map = build_register_map(
+            _test_settings(shelly_mac="34:94:54:11:22:33"),
+            state,
+        )
+        # MAC "3494..." is stored little-endian within each register: '4','3' then '4','9'.
+        self.assertEqual(reg_map[0], (ord("4") << 8) | ord("3"))
+        self.assertEqual(reg_map[1], (ord("4") << 8) | ord("9"))
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1024), 100.0, places=1)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1044), -50.0, places=1)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1064), 25.0, places=1)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1040), 231.2, places=1)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1060), 229.4, places=1)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1164), 55.25, places=2)
+        self.assertAlmostEqual(_decode_shelly_float(reg_map, 1190), 12.5, places=1)
+
+    def test_rejected_requests_and_gaps(self) -> None:
+        self.assertEqual(self.server._handle_pdu(1, b""), b"")
+        self.assertEqual(self.server._handle_pdu(1, bytes([0x04, 0x00])), bytes([0x84, 0x02]))
+        self.assertEqual(
+            self.server._handle_pdu(1, bytes([0x01, 0x00, 0x00, 0x00, 0x01])),
+            bytes([0x81, 0x02]),
+        )
+        for count in (0, 126):
+            pdu = bytes([0x04, 0x00, 0x00, (count >> 8) & 0xFF, count & 0xFF])
+            self.assertEqual(self.server._handle_pdu(1, pdu), bytes([0x84, 0x02]))
+        # Address 100 is outside the identity block and the EM block.
+        gap = self.server._handle_pdu(1, bytes([0x04, 0x00, 0x64, 0x00, 0x01]))
+        self.assertEqual(gap, bytes([0x04, 0x02, 0x00, 0x00]))
+
 
 if __name__ == "__main__":
     unittest.main()

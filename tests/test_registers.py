@@ -97,6 +97,79 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertGreater(m.a_aprt_power, 0.0)
         self.assertGreater(m.a_pf, 0.5)
 
+    def test_short_read_and_nan_payloads(self) -> None:
+        short = parse_registers([0] * 10)
+        self.assertFalse(short.raw_ok)
+        self.assertIn("short_read", short.errors[0])
+        self.assertIsNone(decode_float32([1], 0))
+        self.assertIsNone(decode_float64([0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF], 0))
+        nan_regs = list(struct.unpack(">HH", struct.pack(">f", float("nan"))))
+        self.assertIsNone(decode_float32(nan_regs, 0))
+
+        full = [0] * REGISTER_COUNT
+        off = 344 - REGISTER_START
+        full[off : off + 2] = nan_regs
+        invalid = parse_registers(full)
+        self.assertFalse(invalid.raw_ok)
+        self.assertIn("invalid_float32:344", invalid.errors[0])
+
+    def test_sum_power_when_total_register_missing(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(338, 100.0)
+        put_f32(340, 200.0)
+        put_f32(342, 50.0)
+        parsed = parse_registers(regs)
+        self.assertTrue(parsed.raw_ok)
+        self.assertAlmostEqual(parsed.total_act_power, 350.0, places=2)
+
+    def test_split_power_across_phases_by_current(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(306, 230.0)
+        put_f32(308, 230.0)
+        put_f32(310, 230.0)
+        put_f32(320, 2.0)
+        put_f32(322, 1.0)
+        put_f32(324, 1.0)
+        put_f32(344, 400.0)
+
+        parsed = parse_registers(regs)
+        self.assertAlmostEqual(parsed.a_act_power, 200.0, places=2)
+        self.assertAlmostEqual(parsed.b_act_power, 100.0, places=2)
+        self.assertAlmostEqual(parsed.c_act_power, 100.0, places=2)
+
+    def test_power_factor_clamped_and_apparent_from_voltage_current(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(306, 100.0)
+        put_f32(308, 100.0)
+        put_f32(320, 1.0)
+        put_f32(322, 1.0)
+        put_f32(338, 250.0)
+        put_f32(340, -250.0)
+
+        parsed = parse_registers(regs)
+        self.assertAlmostEqual(parsed.a_pf, 1.0, places=3)
+        self.assertAlmostEqual(parsed.b_pf, -1.0, places=3)
+        self.assertAlmostEqual(parsed.c_pf, 0.0, places=3)
+        self.assertAlmostEqual(parsed.a_aprt_power, 100.0, places=2)
+        self.assertAlmostEqual(parsed.b_aprt_power, 100.0, places=2)
+        self.assertAlmostEqual(parsed.total_aprt_power, 200.0, places=2)
+        self.assertAlmostEqual(parsed.total_act_power, 0.0, places=2)
+
     def test_float64_valid_despite_interior_float32_nonfinite(self) -> None:
         """FLOAT64 energy must not be validated as overlapping FLOAT32 slots."""
         energy_wh = 9961213.80278883
