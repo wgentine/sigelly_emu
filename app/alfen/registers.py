@@ -158,7 +158,8 @@ def _fill_power_factor(m: AlfenMeasurements) -> None:
 
 def _validate_register_encoding(regs: List[int]) -> Optional[str]:
     """Reject blocks that carry non-finite floats (NaN/inf), not Alfen 0xFFFF sentinels."""
-    for off in range(0, REGISTER_COUNT - 1, 2):
+    float32_end = 362 - REGISTER_START  # energy from 362 is FLOAT64, not float32 pairs
+    for off in range(0, float32_end, 2):
         chunk = regs[off : off + 2]
         if _is_nan_regs(chunk):
             continue
