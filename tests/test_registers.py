@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 import unittest
 
@@ -95,6 +96,31 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertAlmostEqual(m.c_act_power, 0.0, places=1)
         self.assertGreater(m.a_aprt_power, 0.0)
         self.assertGreater(m.a_pf, 0.5)
+
+    def test_float64_valid_despite_interior_float32_nonfinite(self) -> None:
+        """FLOAT64 energy must not be validated as overlapping FLOAT32 slots."""
+        energy_wh = 9961213.80278883
+        regs = [0] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        def put_f64(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 4] = _f64_regs(value)
+
+        put_f32(306, 230.0)
+        put_f32(344, 1500.0)
+        put_f64(374, energy_wh)
+
+        words = regs[374 - REGISTER_START : 374 - REGISTER_START + 4]
+        interior = struct.unpack(">f", struct.pack(">HH", words[1], words[2]))[0]
+        self.assertFalse(math.isfinite(interior))
+
+        parsed = parse_registers(regs)
+        self.assertTrue(parsed.raw_ok)
+        self.assertAlmostEqual(parsed.total_act or 0.0, energy_wh, places=2)
 
 
 if __name__ == "__main__":

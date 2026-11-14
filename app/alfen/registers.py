@@ -87,16 +87,39 @@ def decode_float64(regs: List[int], offset: int) -> Optional[float]:
     return float(value)
 
 
-def _f(regs: List[int], address: int, default: float = 0.0) -> float:
-    """Read FLOAT32 at absolute Modbus address within the 306.. window."""
+def _read_f32(regs: List[int], address: int) -> tuple[Optional[float], Optional[str]]:
+    """Decode FLOAT32; (None, None) = Alfen unavailable, else error string when invalid."""
     offset = address - REGISTER_START
-    value = decode_float32(regs, offset)
-    return default if value is None else value
+    chunk = regs[offset : offset + 2]
+    if len(chunk) < 2:
+        return None, f"invalid_float32:{address}"
+    if _is_nan_regs(chunk):
+        return None, None
+    raw = struct.pack(">HH", chunk[0] & 0xFFFF, chunk[1] & 0xFFFF)
+    value = struct.unpack(">f", raw)[0]
+    if not math.isfinite(value):
+        return None, f"invalid_float32:{address}"
+    return float(value), None
 
 
-def _d(regs: List[int], address: int) -> Optional[float]:
+def _read_f64(regs: List[int], address: int) -> tuple[Optional[float], Optional[str]]:
     offset = address - REGISTER_START
-    return decode_float64(regs, offset)
+    chunk = regs[offset : offset + 4]
+    if len(chunk) < 4:
+        return None, f"invalid_float64:{address}"
+    if _is_nan_regs(chunk):
+        return None, None
+    raw = struct.pack(
+        ">HHHH",
+        chunk[0] & 0xFFFF,
+        chunk[1] & 0xFFFF,
+        chunk[2] & 0xFFFF,
+        chunk[3] & 0xFFFF,
+    )
+    value = struct.unpack(">d", raw)[0]
+    if not math.isfinite(value):
+        return None, f"invalid_float64:{address}"
+    return float(value), None
 
 
 def _split_by_current(
@@ -156,33 +179,6 @@ def _fill_power_factor(m: AlfenMeasurements) -> None:
     m.c_pf = _pf(m.c_act_power, m.c_voltage, m.c_current, m.c_pf)
 
 
-def _validate_register_encoding(regs: List[int]) -> Optional[str]:
-    """Reject blocks that carry non-finite floats (NaN/inf), not Alfen 0xFFFF sentinels."""
-    for off in range(0, REGISTER_COUNT - 1, 2):
-        chunk = regs[off : off + 2]
-        if _is_nan_regs(chunk):
-            continue
-        raw = struct.pack(">HH", chunk[0] & 0xFFFF, chunk[1] & 0xFFFF)
-        if not math.isfinite(struct.unpack(">f", raw)[0]):
-            return f"invalid_float32:{REGISTER_START + off}"
-
-    for addr in (362, 366, 370, 374, 378, 382, 386, 390):
-        off = addr - REGISTER_START
-        chunk = regs[off : off + 4]
-        if len(chunk) < 4 or all(r == 0xFFFF for r in chunk):
-            continue
-        raw = struct.pack(
-            ">HHHH",
-            chunk[0] & 0xFFFF,
-            chunk[1] & 0xFFFF,
-            chunk[2] & 0xFFFF,
-            chunk[3] & 0xFFFF,
-        )
-        if not math.isfinite(struct.unpack(">d", raw)[0]):
-            return f"invalid_float64:{addr}"
-    return None
-
-
 def parse_registers(regs: List[int]) -> AlfenMeasurements:
     """Parse a contiguous register block starting at 306 into measurements."""
     if len(regs) < REGISTER_COUNT:
@@ -191,33 +187,51 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
             errors=[f"short_read: got {len(regs)} expected {REGISTER_COUNT}"],
         )
 
-    encoding_error = _validate_register_encoding(regs)
-    if encoding_error is not None:
-        return AlfenMeasurements(raw_ok=False, errors=[encoding_error])
+    parse_error: Optional[str] = None
+
+    def f32(address: int, default: float = 0.0) -> float:
+        nonlocal parse_error
+        value, err = _read_f32(regs, address)
+        if err and parse_error is None:
+            parse_error = err
+        return default if value is None else value
+
+    def f64(address: int) -> Optional[float]:
+        nonlocal parse_error
+        value, err = _read_f64(regs, address)
+        if err and parse_error is None:
+            parse_error = err
+        return value
+
+    def f32_opt(address: int) -> Optional[float]:
+        nonlocal parse_error
+        value, err = _read_f32(regs, address)
+        if err and parse_error is None:
+            parse_error = err
+        return value
 
     m = AlfenMeasurements(raw_ok=True)
 
-    m.a_voltage = _f(regs, 306)
-    m.b_voltage = _f(regs, 308)
-    m.c_voltage = _f(regs, 310)
+    m.a_voltage = f32(306)
+    m.b_voltage = f32(308)
+    m.c_voltage = f32(310)
 
-    n_cur = decode_float32(regs, 318 - REGISTER_START)
-    m.n_current = n_cur
+    m.n_current = f32_opt(318)
 
-    m.a_current = _f(regs, 320)
-    m.b_current = _f(regs, 322)
-    m.c_current = _f(regs, 324)
+    m.a_current = f32(320)
+    m.b_current = f32(322)
+    m.c_current = f32(324)
 
-    m.a_pf = _f(regs, 328)
-    m.b_pf = _f(regs, 330)
-    m.c_pf = _f(regs, 332)
+    m.a_pf = f32(328)
+    m.b_pf = f32(330)
+    m.c_pf = f32(332)
 
-    m.frequency = _f(regs, 336, default=50.0)
+    m.frequency = f32(336, default=50.0)
 
-    m.a_act_power = _f(regs, 338)
-    m.b_act_power = _f(regs, 340)
-    m.c_act_power = _f(regs, 342)
-    m.total_act_power = _f(regs, 344)
+    m.a_act_power = f32(338)
+    m.b_act_power = f32(340)
+    m.c_act_power = f32(342)
+    m.total_act_power = f32(344)
     # If sum register is NaN/zero but phases have power, synthesize total
     if m.total_act_power == 0.0 and (m.a_act_power or m.b_act_power or m.c_act_power):
         m.total_act_power = m.a_act_power + m.b_act_power + m.c_act_power
@@ -225,10 +239,10 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
     # sum power + phase currents (typical for single-phase charging).
     _distribute_missing_phase_powers(m)
 
-    m.a_aprt_power = _f(regs, 346)
-    m.b_aprt_power = _f(regs, 348)
-    m.c_aprt_power = _f(regs, 350)
-    m.total_aprt_power = _f(regs, 352)
+    m.a_aprt_power = f32(346)
+    m.b_aprt_power = f32(348)
+    m.c_aprt_power = f32(350)
+    m.total_aprt_power = f32(352)
     if m.total_aprt_power == 0.0 and (m.a_aprt_power or m.b_aprt_power or m.c_aprt_power):
         m.total_aprt_power = m.a_aprt_power + m.b_aprt_power + m.c_aprt_power
     _distribute_missing_aprt_powers(m)
@@ -236,15 +250,18 @@ def parse_registers(regs: List[int]) -> AlfenMeasurements:
     _fill_power_factor(m)
 
     # Real Energy Delivered L1/L2/L3/Sum (Wh) — FLOAT64
-    m.a_total_act_energy = _d(regs, 362)
-    m.b_total_act_energy = _d(regs, 366)
-    m.c_total_act_energy = _d(regs, 370)
-    m.total_act = _d(regs, 374)
+    m.a_total_act_energy = f64(362)
+    m.b_total_act_energy = f64(366)
+    m.c_total_act_energy = f64(370)
+    m.total_act = f64(374)
 
     # Real Energy Consumed L1/L2/L3/Sum (Wh) — used as returned/export
-    m.a_total_act_ret_energy = _d(regs, 378)
-    m.b_total_act_ret_energy = _d(regs, 382)
-    m.c_total_act_ret_energy = _d(regs, 386)
-    m.total_act_ret = _d(regs, 390)
+    m.a_total_act_ret_energy = f64(378)
+    m.b_total_act_ret_energy = f64(382)
+    m.c_total_act_ret_energy = f64(386)
+    m.total_act_ret = f64(390)
+
+    if parse_error is not None:
+        return AlfenMeasurements(raw_ok=False, errors=[parse_error])
 
     return m
