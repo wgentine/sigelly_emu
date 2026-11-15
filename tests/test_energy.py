@@ -212,6 +212,45 @@ class EnergyStoreTests(unittest.TestCase):
         self.assertEqual(store.state.alfen_errors, ["boom"])
         self.assertFalse(store.state.alfen_ok)
 
+    def test_counters_hit_disk_on_the_save_interval_only(self) -> None:
+        store = self._store(save_interval_s=30.0)
+        sample = _meter(a_voltage=230.0, a_act_power=3600.0, total_act_power=3600.0)
+        store.update_from_alfen(sample)
+        saved = json.loads(Path(self.path).read_text(encoding="utf-8"))
+        self.assertEqual(saved["energy"]["total_act"], 0.0)
+        self.assertNotIn("a_voltage", saved)
+
+        self._clock[0] += 10.0
+        store.update_from_alfen(sample)
+        self.assertAlmostEqual(store.state.energy.total_act, 10.0, places=3)
+        still_old = json.loads(Path(self.path).read_text(encoding="utf-8"))
+        self.assertEqual(still_old["energy"]["total_act"], 0.0)
+
+        self._clock[0] += 25.0
+        store.update_from_alfen(sample)
+        persisted = json.loads(Path(self.path).read_text(encoding="utf-8"))
+        self.assertAlmostEqual(persisted["energy"]["total_act"], 35.0, places=3)
+        self.assertEqual(persisted["energy"]["source"], "integrated")
+
+    def test_save_creates_missing_parent_and_disk_errors_stay_in_memory(self) -> None:
+        nested = Path(self._tmp.name) / "nested" / "meter" / "state.json"
+        store = EnergyStore(state_path=str(nested), save_interval_s=1e12, use_alfen_energy=False)
+        store.state.energy.total_act = 7.25
+        store.save()
+        reloaded = EnergyStore(state_path=str(nested), save_interval_s=1e12, use_alfen_energy=False)
+        self.assertAlmostEqual(reloaded.state.energy.total_act, 7.25, places=3)
+
+        blocked = Path(self._tmp.name) / "not-a-directory"
+        blocked.write_text("x", encoding="utf-8")
+        store.state_path = blocked / "state.json"
+        store._save_interval_s = 1.0
+        store._last_save_ts = 0.0
+        sample = _meter(a_voltage=231.0, a_act_power=100.0, total_act_power=100.0)
+        with self.assertLogs("app.state.energy", level="ERROR"):
+            store.update_from_alfen(sample)
+        self.assertAlmostEqual(store.state.a_voltage, 231.0, places=3)
+        self.assertFalse(store.state_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

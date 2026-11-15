@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
 import struct
 import unittest
 
@@ -118,6 +120,78 @@ class ModbusPduTests(unittest.TestCase):
         # Address 100 is outside the identity block and the EM block.
         gap = self.server._handle_pdu(1, bytes([0x04, 0x00, 0x64, 0x00, 0x01]))
         self.assertEqual(gap, bytes([0x04, 0x02, 0x00, 0x00]))
+
+    def test_mbap_echoes_transaction_and_unit_and_rejects_bad_lengths(self) -> None:
+        asyncio.run(self._mbap_session())
+
+    async def _mbap_session(self) -> None:
+        left, right = socket.socketpair()
+        left.setblocking(False)
+        right.setblocking(False)
+        client_reader, client_writer = await asyncio.open_connection(sock=left)
+        server_reader, server_writer = await asyncio.open_connection(sock=right)
+        task = asyncio.create_task(self.server._client(server_reader, server_writer))
+        try:
+            request = bytes([0x12, 0x34, 0x99, 0x99, 0x00, 0x06, 0x07, 0x04, 0x03, 0xFC, 0x00, 0x02])
+            await asyncio.sleep(0)
+            client_writer.write(request[:3])
+            await client_writer.drain()
+            await asyncio.sleep(0)
+            client_writer.write(request[3:])
+            await client_writer.drain()
+
+            header = await asyncio.wait_for(client_reader.readexactly(6), timeout=2)
+            length = (header[4] << 8) | header[5]
+            body = await asyncio.wait_for(client_reader.readexactly(length), timeout=2)
+            self.assertEqual(header[0:4], b"\x12\x34\x00\x00")
+            self.assertEqual(body[0], 7)
+            self.assertEqual(body[1], 0x04)
+            self.assertEqual(body[2], 4)
+            lo = (body[3] << 8) | body[4]
+            hi = (body[5] << 8) | body[6]
+            value = struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
+            self.assertAlmostEqual(value, 230.0, places=1)
+
+            # A second request on the same connection still gets its own transaction id.
+            client_writer.write(bytes([0x00, 0x09, 0x00, 0x00, 0x00, 0x06, 0x07, 0x03, 0x03, 0xFC, 0x00, 0x02]))
+            await client_writer.drain()
+            exc_header = await asyncio.wait_for(client_reader.readexactly(6), timeout=2)
+            exc_len = (exc_header[4] << 8) | exc_header[5]
+            exc_body = await asyncio.wait_for(client_reader.readexactly(exc_len), timeout=2)
+            self.assertEqual(exc_header[0:4], b"\x00\x09\x00\x00")
+            self.assertEqual(exc_body, bytes([0x07, 0x83, 0x02]))
+
+            client_writer.close()
+            await client_writer.wait_closed()
+            await asyncio.wait_for(task, timeout=2)
+        finally:
+            if not task.done():
+                task.cancel()
+            client_writer.close()
+            server_writer.close()
+
+    def test_mbap_length_out_of_range_closes_without_a_response(self) -> None:
+        asyncio.run(self._mbap_bad_length(b"\x00\x01\x00\x00\x01\x05"))
+        asyncio.run(self._mbap_bad_length(b"\x00\x01\x00\x00\x00\x01"))
+
+    async def _mbap_bad_length(self, header: bytes) -> None:
+        left, right = socket.socketpair()
+        left.setblocking(False)
+        right.setblocking(False)
+        client_reader, client_writer = await asyncio.open_connection(sock=left)
+        server_reader, server_writer = await asyncio.open_connection(sock=right)
+        task = asyncio.create_task(self.server._client(server_reader, server_writer))
+        try:
+            client_writer.write(header)
+            await client_writer.drain()
+            data = await asyncio.wait_for(client_reader.read(64), timeout=2)
+            self.assertEqual(data, b"")
+            await asyncio.wait_for(task, timeout=2)
+        finally:
+            if not task.done():
+                task.cancel()
+            client_writer.close()
+            server_writer.close()
 
 
 if __name__ == "__main__":
