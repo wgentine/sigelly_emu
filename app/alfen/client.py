@@ -240,12 +240,16 @@ class AlfenClient:
 
         parsed = parse_registers(regs)
         with self._lock:
+            if not parsed.raw_ok:
+                self._error_count += 1
+                if self._last.raw_ok or self._poll_count > 0:
+                    parsed = self._merge_keep_last_locked(parsed)
+                self._last_error = parsed.errors[0] if parsed.errors else "parse_error"
+            else:
+                self._last_poll_ts = time.time()
+                self._poll_count += 1
+                self._last_error = None
             self._last = parsed
-            self._last_poll_ts = time.time()
-            self._poll_count += 1
-            self._last_error = (
-                None if parsed.raw_ok else (parsed.errors[0] if parsed.errors else "parse_error")
-            )
         if self.on_update:
             try:
                 self.on_update(parsed)
