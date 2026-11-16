@@ -162,6 +162,53 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertAlmostEqual(parsed.total_aprt_power, 200.0, places=2)
         self.assertAlmostEqual(parsed.total_act_power, 0.0, places=2)
 
+    def test_published_power_factor_is_kept(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(306, 230.0)
+        put_f32(320, 10.0)
+        put_f32(328, 0.5)
+        put_f32(338, 2300.0)
+        parsed = parse_registers(regs)
+        self.assertAlmostEqual(parsed.a_pf, 0.5, places=3)
+        self.assertAlmostEqual(parsed.a_act_power, 2300.0, places=2)
+
+    def test_missing_apparent_power_splits_by_current(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(320, 1.0)
+        put_f32(322, 1.0)
+        put_f32(324, 2.0)
+        put_f32(352, 800.0)
+        parsed = parse_registers(regs)
+        self.assertAlmostEqual(parsed.a_aprt_power, 200.0, places=2)
+        self.assertAlmostEqual(parsed.b_aprt_power, 200.0, places=2)
+        self.assertAlmostEqual(parsed.c_aprt_power, 400.0, places=2)
+        self.assertAlmostEqual(parsed.total_aprt_power, 800.0, places=2)
+
+    def test_zero_current_puts_sum_power_on_phase_a(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+        off = 344 - REGISTER_START
+        regs[off : off + 2] = _f32_regs(500.0)
+        parsed = parse_registers(regs)
+        self.assertAlmostEqual(parsed.a_act_power, 500.0, places=2)
+        self.assertAlmostEqual(parsed.b_act_power, 0.0, places=2)
+        self.assertAlmostEqual(parsed.c_act_power, 0.0, places=2)
+
+    def test_one_ffff_word_is_still_a_float(self) -> None:
+        value = decode_float32([0x3F80, 0xFFFF], 0)
+        self.assertIsNotNone(value)
+        self.assertGreater(value or 0.0, 1.0)
+        self.assertIsNone(decode_float64([1, 2, 3], 0))
+
 
 if __name__ == "__main__":
     unittest.main()
