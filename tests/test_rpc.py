@@ -7,6 +7,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.config import Settings
 from app.debug.trace import RpcTrace
@@ -75,6 +76,18 @@ class RpcHandlerTests(unittest.TestCase):
         self.assertIn("result", results[0])
         self.assertEqual(results[1]["id"], 2)
         self.assertEqual(results[1]["error"]["code"], 404)
+
+    def test_dispatch_exception_becomes_internal_error(self) -> None:
+        with patch("app.shelly.rpc.dispatch_method", side_effect=RuntimeError("boom")):
+            with self.assertLogs("app.shelly.rpc", level="ERROR"):
+                result = self.handler.handle_call(
+                    {"id": 4, "method": "EM.GetStatus", "src": "sigen"}
+                )
+        self.assertEqual(result["id"], 4)
+        self.assertEqual(result["dst"], "sigen")
+        self.assertEqual(result["error"], {"code": -32000, "message": "boom"})
+        self.assertNotIn("result", result)
+        self.assertEqual(self.trace.summary()["errors"]["EM.GetStatus"], 1)
 
     def test_components_include_filter(self) -> None:
         state = MeterState()
