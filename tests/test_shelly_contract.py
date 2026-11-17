@@ -195,6 +195,24 @@ class ShellyContractTests(unittest.TestCase):
             self.assertIn(required, methods)
         self.assertGreater(len(methods), 50)
 
+    def test_list_methods_falls_back_when_the_catalog_is_unreadable(self) -> None:
+        from app.shelly import responses
+
+        with patch.object(responses.Path, "read_text", side_effect=OSError("gone")):
+            missing = responses._load_list_methods()
+        self.assertIn("EM.GetStatus", missing)
+        self.assertIn("Shelly.GetDeviceInfo", missing)
+        self.assertLess(len(missing), 30)
+
+        with patch.object(responses.Path, "read_text", return_value="{not-json"):
+            self.assertIn("EMData.GetStatus", responses._load_list_methods())
+
+        with patch.object(responses.Path, "read_text", return_value='{"methods": []}'):
+            self.assertIn("Wifi.GetStatus", responses._load_list_methods())
+
+        with patch.object(responses.Path, "read_text", return_value="[1, 2]"):
+            self.assertIn("Sys.GetStatus", responses._load_list_methods())
+
 
 if __name__ == "__main__":
     unittest.main()

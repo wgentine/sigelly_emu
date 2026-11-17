@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import struct
 import unittest
+from unittest.mock import patch
 
 from app.config import Settings
 from app.shelly.modbus_server import build_register_map
@@ -105,6 +106,12 @@ class ModbusMapTests(unittest.TestCase):
             MeterState(last_update_ts=1_700_000_000.0),
         )
         self.assertEqual(_ascii(short, 6, 8), "SPEM" + "\x00" * 12)
+
+    def test_unsynced_meter_timestamp_uses_wall_clock(self) -> None:
+        with patch("app.shelly.modbus_server.time.time", return_value=1_800_000_000.0):
+            reg_map = build_register_map(_settings(), MeterState(last_update_ts=0.0))
+        self.assertEqual(_u32(reg_map, 1000), 1_800_000_000)
+        self.assertEqual(_u32(reg_map, 1160), 1_800_000_000)
 
 
 if __name__ == "__main__":
