@@ -159,6 +159,21 @@ class WireDispatchTests(_WireHarness):
         self.assertEqual(results[0]["ct_type"], "3x63A")
         self.assertEqual(results[1]["error"]["code"], 404)
 
+        with self.assertLogs("app.wire_server", level="ERROR"):
+            bad_batch = self.srv._handle_http("GET", "/rpc?batch={", {}, b"", "10.0.0.8")
+        self.assertIn(b"HTTP/1.1 500 Internal Server Error", bad_batch)
+        self.assertIn("error", json.loads(bad_batch.split(b"\r\n\r\n", 1)[1]))
+
+        object_batch = self.srv._handle_http(
+            "GET",
+            '/rpc?batch={"method":"EM.GetConfig"}',
+            {},
+            b"",
+            "10.0.0.8",
+        )
+        self.assertIn(b"HTTP/1.1 200 OK", object_batch)
+        self.assertEqual(json.loads(object_batch.split(b"\r\n\r\n", 1)[1]), [])
+
 
 def _client_frame(payload: bytes, opcode: int = 0x1) -> bytes:
     mask = b"\x01\x02\x03\x04"

@@ -242,6 +242,44 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertTrue(parsed.raw_ok)
         self.assertAlmostEqual(parsed.total_act or 0.0, energy_wh, places=2)
 
+    def test_nonfinite_float64_rejects_the_whole_block(self) -> None:
+        regs = [0] * REGISTER_COUNT
+        regs[344 - REGISTER_START : 344 - REGISTER_START + 2] = _f32_regs(1500.0)
+        regs[374 - REGISTER_START : 374 - REGISTER_START + 4] = _f64_regs(float("nan"))
+
+        parsed = parse_registers(regs)
+        self.assertFalse(parsed.raw_ok)
+        self.assertEqual(parsed.errors, ["invalid_float64:374"])
+        self.assertEqual(parsed.total_act_power, 0.0)
+        self.assertIsNone(parsed.total_act)
+        self.assertIsNone(decode_float64(_f64_regs(float("inf")), 0))
+
+    def test_earliest_invalid_register_is_the_reported_error(self) -> None:
+        regs = [0] * REGISTER_COUNT
+        regs[306 - REGISTER_START : 306 - REGISTER_START + 2] = _f32_regs(float("inf"))
+        regs[374 - REGISTER_START : 374 - REGISTER_START + 4] = _f64_regs(float("nan"))
+
+        parsed = parse_registers(regs)
+        self.assertFalse(parsed.raw_ok)
+        self.assertEqual(parsed.errors, ["invalid_float32:306"])
+
+    def test_published_apparent_power_survives_a_missing_total(self) -> None:
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(306, 230.0)
+        put_f32(320, 1.0)
+        put_f32(346, 500.0)
+
+        parsed = parse_registers(regs)
+        self.assertTrue(parsed.raw_ok)
+        self.assertAlmostEqual(parsed.a_aprt_power, 500.0, places=2)
+        self.assertAlmostEqual(parsed.total_aprt_power, 500.0, places=2)
+        self.assertAlmostEqual(parsed.b_aprt_power, 0.0, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -145,6 +145,45 @@ class EnergyStoreTests(unittest.TestCase):
         self.assertAlmostEqual(store.state.energy.total_act, 3600.0, places=3)
         self.assertEqual(store.state.energy.source, "integrated")
 
+    def test_missing_energy_registers_keep_lifetime_totals(self) -> None:
+        store = self._store(use_alfen_energy=True)
+        store.update_from_alfen(
+            _meter(
+                a_act_power=3600.0,
+                total_act_power=3600.0,
+                a_total_act_energy=5000.0,
+                total_act=5000.0,
+                a_total_act_ret_energy=20.0,
+                total_act_ret=20.0,
+            )
+        )
+        self.assertEqual(store.state.energy.source, "alfen")
+
+        self._clock[0] += 1800.0
+        store.update_from_alfen(_meter(a_act_power=3600.0, total_act_power=3600.0))
+
+        energy = store.state.energy
+        self.assertEqual(energy.source, "integrated")
+        self.assertAlmostEqual(energy.total_act, 6800.0, places=3)
+        self.assertAlmostEqual(energy.a_total_act_energy, 6800.0, places=3)
+        self.assertAlmostEqual(energy.total_act_ret, 20.0, places=3)
+        self.assertAlmostEqual(energy.a_total_act_ret_energy, 20.0, places=3)
+
+    def test_return_energy_alone_does_not_replace_counters(self) -> None:
+        store = self._store(use_alfen_energy=True)
+        store.update_from_alfen(_meter(total_act_power=0.0))
+        self._clock[0] += 3600.0
+        store.update_from_alfen(
+            _meter(
+                total_act_power=0.0,
+                a_total_act_ret_energy=9999.0,
+                total_act_ret=9999.0,
+            )
+        )
+        self.assertEqual(store.state.energy.source, "integrated")
+        self.assertEqual(store.state.energy.total_act, 0.0)
+        self.assertEqual(store.state.energy.total_act_ret, 0.0)
+
     def test_explicit_zero_alfen_energy_replaces_counters(self) -> None:
         store = self._store(use_alfen_energy=True)
         store.update_from_alfen(_meter(total_act=100.0, a_total_act_energy=100.0))

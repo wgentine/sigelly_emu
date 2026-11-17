@@ -133,6 +133,44 @@ class AlfenInvalidBlockTests(unittest.TestCase):
         self.assertEqual(client.poll_count, 1)
         self.assertEqual(client.error_count, 2)
 
+    def test_invalid_float64_energy_keeps_last_good_watt_hours(self) -> None:
+        store = EnergyStore(
+            state_path="/tmp/sigelly-alfen-invalid-float64.json",
+            use_alfen_energy=True,
+        )
+        client = AlfenClient("127.0.0.1", port=1, on_update=store.update_from_alfen)
+        client._ensure_connected = lambda: True  # type: ignore[method-assign]
+        good_regs = _register_block()
+        energy_off = 374 - REGISTER_START
+        good_regs[energy_off : energy_off + 4] = list(
+            struct.unpack(">HHHH", struct.pack(">d", 4242.5))
+        )
+        client._read_holding = lambda: list(good_regs)  # type: ignore[method-assign]
+
+        good = client.poll_once()
+        self.assertTrue(good.raw_ok)
+        self.assertAlmostEqual(good.total_act or 0.0, 4242.5, places=2)
+        self.assertAlmostEqual(store.state.energy.total_act, 4242.5, places=2)
+        self.assertEqual(store.state.energy.source, "alfen")
+
+        bad_regs = list(good_regs)
+        bad_regs[energy_off : energy_off + 4] = list(
+            struct.unpack(">HHHH", struct.pack(">d", float("nan")))
+        )
+        client._read_holding = lambda: bad_regs  # type: ignore[method-assign]
+        failed = client.poll_once()
+
+        self.assertFalse(failed.raw_ok)
+        self.assertEqual(failed.errors, ["invalid_float64:374"])
+        self.assertAlmostEqual(failed.total_act_power, 1500.0, places=1)
+        self.assertAlmostEqual(failed.total_act or 0.0, 4242.5, places=2)
+        self.assertAlmostEqual(store.state.total_act_power, 1500.0, places=1)
+        self.assertAlmostEqual(store.state.energy.total_act, 4242.5, places=2)
+        self.assertEqual(store.state.energy.source, "alfen")
+        self.assertEqual(client.poll_count, 1)
+        self.assertEqual(client.error_count, 1)
+        self.assertEqual(client.last_error, "invalid_float64:374")
+
 
 class _FakeSocket:
     """Stand-in for pymodbus' TCP client. Records the kwargs the poller sends."""

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -160,6 +161,43 @@ class ResponseEdgeTests(unittest.TestCase):
         self.assertEqual(status["utc_offset"], 0)
         self.assertRegex(status["time"], r"^\d{2}:\d{2}$")
         self.assertEqual(status["last_sync_ts"], 1_700_000_000)
+
+
+class RpcTraceTests(unittest.TestCase):
+    def test_ring_keeps_newest_and_counts_errors(self) -> None:
+        trace = RpcTrace(maxlen=2)
+        trace.record("10.0.0.1", "EM.GetStatus", "POST", True)
+        trace.record("10.0.0.2", "Nope", "GET", False)
+        trace.record("10.0.0.3", "EM.GetConfig", "WS", True)
+
+        self.assertEqual([event["method"] for event in trace.recent()], ["EM.GetConfig", "Nope"])
+        summary = trace.summary()
+        self.assertEqual(summary["total_calls"], 3)
+        self.assertEqual(summary["methods"]["EM.GetStatus"], 1)
+        self.assertEqual(summary["errors"], {"Nope": 1})
+        self.assertEqual(len(summary["recent"]), 2)
+        self.assertTrue(summary["recent"][0]["ok"])
+        self.assertEqual(summary["recent"][0]["client_ip"], "10.0.0.3")
+        self.assertFalse(summary["recent"][1]["ok"])
+
+    def test_concurrent_records_do_not_drop_counts(self) -> None:
+        trace = RpcTrace()
+
+        def worker(ok: bool) -> None:
+            for _ in range(100):
+                trace.record("10.0.0.1", "EM.GetStatus", "POST", ok)
+
+        threads = [threading.Thread(target=worker, args=(index % 2 == 0,)) for index in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        summary = trace.summary()
+        self.assertEqual(summary["total_calls"], 400)
+        self.assertEqual(summary["methods"]["EM.GetStatus"], 400)
+        self.assertEqual(summary["errors"]["EM.GetStatus"], 200)
+        self.assertEqual(len(trace.recent(1000)), 200)
 
 
 class WireQueryTests(unittest.TestCase):
