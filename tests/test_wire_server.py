@@ -9,6 +9,7 @@ import json
 import socket
 import struct
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -173,6 +174,65 @@ class WireDispatchTests(_WireHarness):
         )
         self.assertIn(b"HTTP/1.1 200 OK", object_batch)
         self.assertEqual(json.loads(object_batch.split(b"\r\n\r\n", 1)[1]), [])
+
+    def test_background_start_obeys_modbus_flag_and_stop_persists_energy(self) -> None:
+        disabled_order = self._exercise_background(self.srv, total_act=4.5)
+        self.assertEqual(disabled_order, ["mdns", "alfen"])
+        saved = json.loads(Path(self.srv.store.state_path).read_text(encoding="utf-8"))
+        self.assertEqual(saved["energy"]["total_act"], 4.5)
+        self.assertEqual(saved["energy"]["source"], "integrated")
+
+        enabled_settings = Settings(
+            alfen_host="127.0.0.1",
+            state_path=str(Path(self._tmp.name) / "enabled.json"),
+            shelly_advertise_ip="192.168.9.9",
+            shelly_device_id="aabbccddeeff",
+            shelly_mac="aa:bb:cc:dd:ee:ff",
+            mdns_enable=False,
+            shelly_modbus_enable=True,
+            shelly_modbus_port=5502,
+        )
+        with (
+            patch("app.wire_server.get_settings", return_value=enabled_settings),
+            patch("app.wire_server._configure_logging"),
+        ):
+            enabled = ShellyWireServer()
+        enabled_order = self._exercise_background(enabled, total_act=9.25)
+        self.assertEqual(enabled_order, ["mdns", "modbus", "alfen"])
+        enabled_saved = json.loads(Path(enabled.store.state_path).read_text(encoding="utf-8"))
+        self.assertEqual(enabled_saved["energy"]["total_act"], 9.25)
+
+    def _exercise_background(self, server: ShellyWireServer, total_act: float) -> list[str]:
+        started: list[str] = []
+        entered = threading.Event()
+        release = threading.Event()
+
+        def mdns_start() -> None:
+            started.append("mdns")
+            entered.set()
+            release.wait(2)
+
+        server.alfen.start = lambda: started.append("alfen")  # type: ignore[method-assign]
+        server.modbus.start = lambda: started.append("modbus")  # type: ignore[method-assign]
+        server.mdns.start = mdns_start  # type: ignore[method-assign]
+        order: list[str] = []
+        server.mdns.stop = lambda: order.append("mdns")  # type: ignore[method-assign]
+        server.modbus.stop = lambda: order.append("modbus")  # type: ignore[method-assign]
+        server.alfen.stop = lambda: order.append("alfen")  # type: ignore[method-assign]
+
+        server.start_background()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(started[0], "alfen")
+            if server.settings.shelly_modbus_enable:
+                self.assertEqual(started, ["alfen", "modbus", "mdns"])
+            else:
+                self.assertEqual(started, ["alfen", "mdns"])
+            server.store.state.energy.total_act = total_act
+            server.stop()
+        finally:
+            release.set()
+        return order
 
 
 def _client_frame(payload: bytes, opcode: int = 0x1) -> bytes:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -270,6 +271,38 @@ class EnergyStoreTests(unittest.TestCase):
         persisted = json.loads(Path(self.path).read_text(encoding="utf-8"))
         self.assertAlmostEqual(persisted["energy"]["total_act"], 35.0, places=3)
         self.assertEqual(persisted["energy"]["source"], "integrated")
+
+    def test_concurrent_updates_integrate_the_same_interval_once(self) -> None:
+        store = self._store()
+        sample = _meter(
+            a_act_power=3600.0,
+            b_act_power=-1800.0,
+            c_act_power=0.0,
+            total_act_power=1800.0,
+        )
+        store.update_from_alfen(sample)
+        self._clock[0] += 3600.0
+        barrier = threading.Barrier(8)
+
+        def worker() -> None:
+            barrier.wait()
+            store.update_from_alfen(sample)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        energy = store.state.energy
+        self.assertAlmostEqual(energy.total_act, 1800.0, places=3)
+        self.assertAlmostEqual(energy.total_act_ret, 0.0, places=3)
+        self.assertAlmostEqual(energy.a_total_act_energy, 3600.0, places=3)
+        self.assertAlmostEqual(energy.b_total_act_ret_energy, 1800.0, places=3)
+        self.assertAlmostEqual(energy.b_total_act_energy, 0.0, places=3)
+        snap = store.snapshot()
+        self.assertAlmostEqual(snap.energy.total_act, energy.total_act, places=3)
+        self.assertEqual(snap.energy.source, "integrated")
 
     def test_save_creates_missing_parent_and_disk_errors_stay_in_memory(self) -> None:
         nested = Path(self._tmp.name) / "nested" / "meter" / "state.json"

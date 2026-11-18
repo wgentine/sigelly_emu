@@ -7,7 +7,11 @@ from __future__ import annotations
 import asyncio
 import socket
 import struct
+import tempfile
+import threading
+import time
 import unittest
+from pathlib import Path
 
 from app.config import Settings
 from app.shelly.modbus_server import (
@@ -192,6 +196,132 @@ class ModbusPduTests(unittest.TestCase):
                 task.cancel()
             client_writer.close()
             server_writer.close()
+
+
+class ModbusLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.store = EnergyStore(
+            state_path=str(Path(self._tmp.name) / "state.json"),
+            use_alfen_energy=False,
+        )
+        self.store.state.a_voltage = 230.0
+        self.store.state.last_update_ts = 1_700_000_000.0
+        self.server = ShellyModbusServer(
+            _test_settings(),
+            self.store,
+            host="127.0.0.1",
+            port=0,
+        )
+
+    def tearDown(self) -> None:
+        thread = self.server._thread
+        if thread is not None and thread.is_alive():
+            self.server.stop()
+            thread.join(timeout=2)
+        self._tmp.cleanup()
+
+    def _wait_port(self) -> int:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            listener = self.server._server
+            sockets = list(listener.sockets or []) if listener is not None else []
+            if sockets:
+                return int(sockets[0].getsockname()[1])
+            thread = self.server._thread
+            if thread is not None and not thread.is_alive():
+                self.fail("modbus thread exited before it listened")
+            time.sleep(0.01)
+        self.fail("modbus server did not listen")
+
+    def _read_fc04(self, port: int) -> bytes:
+        request = bytes([0x12, 0x34, 0x00, 0x00, 0x00, 0x06, 0x07, 0x04, 0x03, 0xFC, 0x00, 0x02])
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+            sock.settimeout(2)
+            sock.sendall(request)
+            buf = b""
+            while len(buf) < 13:
+                chunk = sock.recv(13 - len(buf))
+                if not chunk:
+                    break
+                buf += chunk
+            return buf
+
+    def test_start_serves_input_registers_and_stop_releases_the_port(self) -> None:
+        thread_errors: list[BaseException] = []
+        previous_hook = threading.excepthook
+
+        def _hook(args: threading.ExceptHookArgs) -> None:
+            if args.exc_value is not None:
+                thread_errors.append(args.exc_value)
+
+        threading.excepthook = _hook
+        try:
+            self.server.start()
+            thread = self.server._thread
+            self.assertIsNotNone(thread)
+            port = self._wait_port()
+            self.server.start()
+            self.assertIs(self.server._thread, thread)
+
+            body = self._read_fc04(port)
+            self.assertEqual(body[0:3], b"\x12\x34\x00")
+            self.assertEqual(body[6], 7)
+            self.assertEqual(body[7], 0x04)
+            self.assertEqual(body[8], 4)
+            lo = (body[9] << 8) | body[10]
+            hi = (body[11] << 8) | body[12]
+            value = struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
+            self.assertAlmostEqual(value, 230.0, places=1)
+
+            assert thread is not None
+            self.server.stop()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            with self.assertRaises(ConnectionRefusedError):
+                socket.create_connection(("127.0.0.1", port), timeout=1)
+
+            self.server.start()
+            restarted = self.server._thread
+            self.assertIsNot(restarted, thread)
+            restarted_port = self._wait_port()
+            again = self._read_fc04(restarted_port)
+            self.assertEqual(again[7], 0x04)
+            assert restarted is not None
+            self.server.stop()
+            restarted.join(timeout=2)
+            self.assertFalse(restarted.is_alive())
+        finally:
+            threading.excepthook = previous_hook
+        self.assertEqual(thread_errors, [])
+
+    def test_listener_crash_is_logged_unless_shutdown_already_started(self) -> None:
+        async def crash() -> None:
+            raise RuntimeError("bind failed")
+
+        self.server._run = crash  # type: ignore[method-assign]
+        with self.assertLogs("app.shelly.modbus_server", level="ERROR") as logs:
+            self.server.start()
+            crashed = self.server._thread
+            self.assertIsNotNone(crashed)
+            assert crashed is not None
+            crashed.join(timeout=2)
+        self.assertFalse(crashed.is_alive())
+        self.assertTrue(any("Modbus server crashed" in line for line in logs.output))
+        self.assertTrue(any("bind failed" in line for line in logs.output))
+
+        async def crash_during_stop() -> None:
+            self.server._stop.set()
+            raise RuntimeError("closed")
+
+        self.server._run = crash_during_stop  # type: ignore[method-assign]
+        with self.assertNoLogs("app.shelly.modbus_server", level="ERROR"):
+            self.server.start()
+            quiet = self.server._thread
+            self.assertIsNotNone(quiet)
+            assert quiet is not None
+            quiet.join(timeout=2)
+        self.assertFalse(quiet.is_alive())
 
 
 if __name__ == "__main__":
