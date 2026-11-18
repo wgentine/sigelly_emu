@@ -221,6 +221,10 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes. Python dependencies are pinned in `requirements.txt`; Dependabot opens weekly update PRs.
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for supported versions and how to report vulnerabilities.
+
 ## License
 
 Copyright © 2026 W. Gentine
