@@ -225,7 +225,10 @@ class ShellyModbusServer:
             self._loop = loop
             try:
                 loop.run_until_complete(self._run())
-            except Exception:  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                # serve_forever() is cancelled when stop() closes the listener.
+                # CancelledError is a BaseException, so it would otherwise
+                # escape the thread and look like a crash on every shutdown.
                 if not self._stop.is_set():
                     logger.exception("Modbus server crashed")
             finally:

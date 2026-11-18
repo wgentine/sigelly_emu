@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 import struct
 import threading
+import time
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -485,6 +486,56 @@ class AlfenBackoffTests(unittest.TestCase):
         with patch("app.alfen.client.time.monotonic", monotonic):
             client._loop()
         self.assertEqual(waits, [0.1])
+
+
+class AlfenThreadTests(unittest.TestCase):
+    def test_start_keeps_one_poller_and_stop_joins_it(self) -> None:
+        created: list[_ScriptedModbus] = []
+
+        def factory(host: str, port: int, timeout: float) -> _ScriptedModbus:
+            client = _ScriptedModbus(host, port, timeout, ok=False)
+            created.append(client)
+            return client
+
+        poller = AlfenClient("10.1.1.1", port=1502, poll_interval=0.05, connect_timeout=0.2)
+        with patch("app.alfen.client.ModbusTcpClient", factory):
+            with self.assertLogs("app.alfen.client", level="WARNING"):
+                poller.start()
+                first = poller._thread
+                self.assertIsNotNone(first)
+                assert first is not None
+                self.assertTrue(first.is_alive())
+                poller.start()
+                self.assertIs(poller._thread, first)
+
+                deadline = time.monotonic() + 2.0
+                while poller.error_count == 0 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertGreaterEqual(poller.error_count, 1)
+                poller.stop()
+
+                self.assertIsNone(poller._thread)
+                self.assertFalse(first.is_alive())
+                self.assertFalse(poller.connected)
+                settled = poller.error_count
+                time.sleep(0.05)
+                self.assertEqual(poller.error_count, settled)
+                self.assertTrue(created)
+                self.assertTrue(all(client.closed for client in created))
+
+                poller.start()
+                restarted = poller._thread
+                self.assertIsNotNone(restarted)
+                assert restarted is not None
+                self.assertIsNot(restarted, first)
+                self.assertTrue(restarted.is_alive())
+                deadline = time.monotonic() + 2.0
+                while poller.error_count == settled and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertGreater(poller.error_count, settled)
+                poller.stop()
+                self.assertIsNone(poller._thread)
+                self.assertFalse(restarted.is_alive())
 
 
 if __name__ == "__main__":
