@@ -130,7 +130,9 @@ In **ACE Service Installer**:
 To diff HTTP/RPC JSON against a physical Pro 3EM-3CT63 on your LAN:
 
 ```bash
-./scripts/compare_shelly.sh http://<real-shelly-ip> http://127.0.0.1:8080
+# Docker / default HTTP_PORT=80 (Quick start above):
+./scripts/compare_shelly.sh http://<real-shelly-ip> http://127.0.0.1
+# Local run with HTTP_PORT=8080: use http://127.0.0.1:8080 as the second URL
 # Report under /tmp/shelly_compare/report.txt
 ```
 
