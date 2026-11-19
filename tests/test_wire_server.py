@@ -12,10 +12,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from app.config import Settings
-from app.wire_server import ShellyWireServer, _shelly_http_response
+from app.wire_server import ShellyWireServer, _amain, _shelly_http_response
 
 
 class WireServerResponseTests(unittest.TestCase):
@@ -393,6 +394,75 @@ class WireSocketTests(_WireHarness):
                 break
             buf += chunk
         return buf
+
+
+class WireEntrypointTests(unittest.TestCase):
+    def test_amain_clears_settings_and_stops_when_the_listener_fails(self) -> None:
+        settings = Settings(
+            alfen_host="127.0.0.1",
+            state_path="/tmp/sigelly-unused-state.json",
+            shelly_advertise_ip="192.168.9.9",
+            http_port=8088,
+            mdns_enable=False,
+            shelly_modbus_enable=False,
+        )
+        order: list[str] = []
+        holder: list[Any] = []
+
+        class FakeServer:
+            def __init__(self) -> None:
+                order.append("server")
+                self.settings = settings
+                holder.append(self)
+
+            def start_background(self) -> None:
+                order.append("start")
+
+            def stop(self) -> None:
+                order.append("stop")
+
+            async def handle_client(self, reader: Any, writer: Any) -> None:
+                return None
+
+        class Listener:
+            sockets: list[Any] = []
+
+            async def __aenter__(self) -> "Listener":
+                order.append("accept")
+                return self
+
+            async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+                order.append("close")
+                return False
+
+            async def serve_forever(self) -> None:
+                order.append("serve")
+                raise RuntimeError("listener stopped")
+
+        async def start_server(handler: Any, host: str, port: int) -> Listener:
+            order.append("listen")
+            self.assertEqual(order, ["clear", "server", "start", "listen"])
+            self.assertEqual(host, "0.0.0.0")
+            self.assertEqual(port, 8088)
+            self.assertIs(handler.__self__, holder[0])
+            self.assertIs(handler.__func__, FakeServer.handle_client)
+            return Listener()
+
+        with (
+            patch("app.wire_server.get_settings") as get_settings,
+            patch("app.wire_server.ShellyWireServer", FakeServer),
+            patch("app.wire_server.asyncio.start_server", start_server),
+            self.assertLogs("app.wire_server", level="INFO") as logs,
+        ):
+            get_settings.cache_clear.side_effect = lambda: order.append("clear")
+            with self.assertRaises(RuntimeError):
+                asyncio.run(_amain())
+
+        self.assertEqual(
+            order,
+            ["clear", "server", "start", "listen", "accept", "serve", "close", "stop"],
+        )
+        self.assertTrue(any("Shelly wire HTTP listening" in line for line in logs.output))
 
 
 if __name__ == "__main__":

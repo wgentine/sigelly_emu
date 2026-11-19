@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 W. Gentine
-"""FastAPI debug server: RPC validation, query coercion, and /debug."""
+"""FastAPI debug server: RPC validation, query coercion, lifespan, and /debug."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from starlette.requests import Request
@@ -309,6 +312,221 @@ class _ConnectedAlfen(_Alfen):
         status = super().get_status()
         status["connected"] = True
         return status
+
+
+_MAIN_GLOBALS = ("settings", "store", "alfen", "mdns", "modbus", "trace", "rpc")
+
+
+class _LifespanAlfen:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+class _LifespanModbus:
+    def __init__(self, settings: Settings, store: EnergyStore, port: int, unit_id: int) -> None:
+        self.settings = settings
+        self.store = store
+        self.port = port
+        self.unit_id = unit_id
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+class _LifespanMdns:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+class DebugLifespanTests(unittest.TestCase):
+    def test_unknown_log_level_falls_back_to_info(self) -> None:
+        with patch("app.main.logging.basicConfig") as basic:
+            main._configure_logging("not-a-level")
+            main._configure_logging("warning")
+        self.assertEqual(
+            basic.call_args_list[0].kwargs["level"],
+            logging.INFO,
+        )
+        self.assertEqual(basic.call_args_list[1].kwargs["level"], logging.WARNING)
+        self.assertEqual(
+            basic.call_args_list[0].kwargs["format"],
+            "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+
+    def test_lifespan_does_not_wait_on_mdns_and_persists_energy(self) -> None:
+        self._exercise(modbus_enabled=True, mdns_error=None)
+
+    def test_lifespan_skips_modbus_and_survives_mdns_startup_failure(self) -> None:
+        self._exercise(modbus_enabled=False, mdns_error=RuntimeError("probe timeout"))
+
+    def _exercise(self, *, modbus_enabled: bool, mdns_error: BaseException | None) -> None:
+        started: list[str] = []
+        stopped: list[str] = []
+        entered = threading.Event()
+        release = threading.Event()
+        threads: list[threading.Thread] = []
+        real_thread = threading.Thread
+
+        def capture_thread(*args: Any, **kwargs: Any) -> threading.Thread:
+            thread = real_thread(*args, **kwargs)
+            threads.append(thread)
+            return thread
+
+        class Alfen(_LifespanAlfen):
+            def start(self) -> None:
+                started.append("alfen")
+
+            def stop(self) -> None:
+                stopped.append("alfen")
+
+        class Modbus(_LifespanModbus):
+            def start(self) -> None:
+                started.append("modbus")
+
+            def stop(self) -> None:
+                stopped.append("modbus")
+
+        class Mdns(_LifespanMdns):
+            def start(self) -> None:
+                started.append("mdns")
+                entered.set()
+                if mdns_error is not None:
+                    raise mdns_error
+                release.wait()
+
+            def stop(self) -> None:
+                stopped.append("mdns")
+
+        previous = {name: getattr(main, name) for name in _MAIN_GLOBALS if hasattr(main, name)}
+        missing = [name for name in _MAIN_GLOBALS if not hasattr(main, name)]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                state_path = Path(tmp) / "state.json"
+                settings = Settings(
+                    alfen_host="10.1.1.1",
+                    alfen_port=1502,
+                    alfen_slave_id=7,
+                    alfen_poll_interval=0.5,
+                    alfen_connect_timeout=1.5,
+                    alfen_use_energy=True,
+                    state_path=str(state_path),
+                    shelly_advertise_ip="192.168.9.9",
+                    shelly_device_id="aabbccddeeff",
+                    shelly_mac="aa:bb:cc:dd:ee:ff",
+                    http_port=8080,
+                    mdns_enable=False,
+                    shelly_modbus_enable=modbus_enabled,
+                    shelly_modbus_port=5502,
+                    shelly_modbus_unit_id=7,
+                    log_level="warning",
+                )
+                with (
+                    patch("app.main.get_settings", return_value=settings),
+                    patch("app.main.AlfenClient", Alfen),
+                    patch("app.main.ShellyModbusServer", Modbus),
+                    patch("app.main.ShellyMdns", Mdns),
+                    patch("app.main.threading.Thread", capture_thread),
+                    patch("app.main.logging.basicConfig") as basic,
+                    self.assertLogs("app.main", level="INFO") as logs,
+                ):
+                    asyncio.run(
+                        self._run_lifespan(
+                            settings,
+                            started,
+                            stopped,
+                            entered,
+                            threads,
+                            mdns_blocks=mdns_error is None,
+                        )
+                    )
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+        finally:
+            release.set()
+            for thread in threads:
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+            for name in missing:
+                if hasattr(main, name):
+                    delattr(main, name)
+            for name, value in previous.items():
+                setattr(main, name, value)
+
+        self.assertEqual(basic.call_args.kwargs["level"], logging.WARNING)
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0].name, "mdns-start")
+        self.assertTrue(threads[0].daemon)
+        self.assertEqual(saved["energy"]["total_act"], 12.5)
+        self.assertEqual(saved["energy"]["source"], "integrated")
+        text = "\n".join(logs.output)
+        self.assertIn("sigelly_emu shutdown complete", text)
+        if modbus_enabled:
+            self.assertEqual(started, ["alfen", "modbus", "mdns"])
+            self.assertEqual(stopped, ["mdns", "modbus", "alfen"])
+            self.assertIn("modbus=:5502", text)
+            self.assertNotIn("probe timeout", text)
+        else:
+            self.assertEqual(started, ["alfen", "mdns"])
+            self.assertEqual(stopped, ["mdns", "alfen"])
+            self.assertIn("modbus=off", text)
+            self.assertIn("Background mDNS start failed", text)
+            self.assertIn("probe timeout", text)
+
+    async def _run_lifespan(
+        self,
+        settings: Settings,
+        started: list[str],
+        stopped: list[str],
+        entered: threading.Event,
+        threads: list[threading.Thread],
+        *,
+        mdns_blocks: bool,
+    ) -> None:
+        async with main.lifespan(main.app):
+            self.assertTrue(entered.wait(2))
+            if not mdns_blocks:
+                threads[0].join(2)
+                self.assertFalse(threads[0].is_alive())
+            self.assertIs(main.settings, settings)
+            callback = main.alfen.kwargs["on_update"]
+            self.assertIs(callback.__self__, main.store)
+            self.assertIs(callback.__func__, EnergyStore.update_from_alfen)
+            self.assertEqual(main.alfen.kwargs["host"], "10.1.1.1")
+            self.assertEqual(main.alfen.kwargs["port"], 1502)
+            self.assertEqual(main.alfen.kwargs["slave_id"], 7)
+            self.assertEqual(main.alfen.kwargs["poll_interval"], 0.5)
+            self.assertEqual(main.alfen.kwargs["connect_timeout"], 1.5)
+            self.assertTrue(main.store._use_alfen_energy_flag)
+            self.assertEqual(main.store.state_path, Path(settings.state_path))
+            self.assertIs(main.rpc.settings, settings)
+            self.assertIs(main.rpc.store, main.store)
+            self.assertIs(main.rpc.trace, main.trace)
+            if settings.shelly_modbus_enable:
+                self.assertEqual(main.modbus.port, 5502)
+                self.assertEqual(main.modbus.unit_id, 7)
+                self.assertIs(main.modbus.store, main.store)
+                self.assertEqual(started, ["alfen", "modbus", "mdns"])
+            else:
+                self.assertEqual(started, ["alfen", "mdns"])
+            self.assertEqual(threads[0].name, "mdns-start")
+            self.assertEqual(threads[0].is_alive(), mdns_blocks)
+            main.store.state.energy.total_act = 12.5
+        self.assertEqual(stopped[0], "mdns")
+        self.assertEqual(threads[0].is_alive(), mdns_blocks)
 
 
 if __name__ == "__main__":
