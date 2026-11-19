@@ -56,7 +56,7 @@ http://<advertise-ip>/debug
 
 ### Pre-built images (GitHub Releases)
 
-Publishing a GitHub Release builds and pushes the image to GHCR. `docker-compose.yml` pulls that image by default:
+Publishing a GitHub Release builds and pushes multi-arch images (`linux/amd64`, `linux/arm64`) to GHCR. `docker-compose.yml` pulls that image by default:
 
 ```bash
 docker pull ghcr.io/wgentine/sigelly_emu:latest
