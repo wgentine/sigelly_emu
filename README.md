@@ -217,6 +217,14 @@ If Alfen energy registers are unavailable, power is integrated into Wh counters 
 | Nonsense power values | Byte order / Modbus map — compare Alfen UI vs `/rpc/EM.GetStatus` |
 | Port 80/502 permission denied | Need `cap_add: [NET_BIND_SERVICE]` (compose default). Rootless Docker cannot bind privileged ports |
 
+## Pull request review and auto-merge
+
+Low-risk pull requests against `main` can be approved by [Cursor PR Routing & Approval](https://cursor.com/docs/approval-agents) when they satisfy [APPROVAL_POLICY.md](APPROVAL_POLICY.md) (green CI, clean Bugbot, no high-risk paths). Cursor approves only; merging still happens on GitHub.
+
+After `cursor[bot]` submits an **approved** review, the [Auto-merge after Cursor approval](.github/workflows/auto-merge.yml) workflow runs `gh pr merge --auto --squash`. GitHub merges once branch protection requirements are satisfied (maintainer must enable **Allow auto-merge** and require approvals plus the configured status checks — without required checks, auto-merge can land immediately).
+
+High-risk areas (workflows, Docker/release files, policies, major dependency bumps) stay with **@wgentine** per the policy file.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes. Python dependencies are pinned in `requirements.txt`; Dependabot opens weekly update PRs.

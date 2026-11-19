@@ -1,0 +1,32 @@
+name: Auto-merge after Cursor approval
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+env:
+  # Cursor PR Routing & Approval submits GitHub reviews as the Cursor GitHub App
+  # (login cursor[bot]; see https://github.com/apps/cursor and Cursor Automations → Identity).
+  CURSOR_APPROVER_LOGINS: cursor[bot]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  queue-auto-merge:
+    name: Queue auto-merge
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Enable squash auto-merge
+        if: >-
+          contains(format(',{0},', env.CURSOR_APPROVER_LOGINS), format(',{0},', github.event.review.user.login))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh pr merge "${{ github.event.pull_request.number }}" --auto --squash
