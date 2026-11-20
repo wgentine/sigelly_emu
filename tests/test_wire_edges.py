@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 W. Gentine
-"""WebSocket frame edges and non-finite meter JSON on the wire server."""
+"""WebSocket frame edges, early peer close, and non-finite meter JSON."""
 
 from __future__ import annotations
 
@@ -34,12 +34,38 @@ def _settings(state_path: str) -> Settings:
 class _Writer:
     def __init__(self) -> None:
         self.buf = bytearray()
+        self.closed = False
+
+    def get_extra_info(self, name: str):
+        if name == "peername":
+            return ("10.4.5.6", 44000)
+        return None
 
     def write(self, data: bytes) -> None:
         self.buf.extend(data)
 
     async def drain(self) -> None:
         return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _ChunkReader:
+    """One queued chunk per read, then b'' so a closed peer is explicit."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+        self.reads = 0
+
+    async def read(self, _n: int = -1) -> bytes:
+        self.reads += 1
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
 
 
 def _masked_frame(payload: bytes, opcode: int = 0x1, length_bits: int | None = None) -> bytes:
@@ -174,6 +200,89 @@ class WireEdgeTests(unittest.TestCase):
         self.assertIn(b"HTTP/1.1 400 Bad Request", raw)
         self.assertIn(b"missing key", raw)
         self.assertNotIn(b"101", raw)
+
+    def test_closed_peer_during_http_body_does_not_spin(self) -> None:
+        body = b'{"id":9,"method":"EM.GetConfig"}'
+        head = (
+            b"POST /rpc HTTP/1.1\r\nHost: meter\r\nContent-Length: "
+            + str(len(body)).encode()
+            + b"\r\n\r\n"
+        )
+
+        async def run(chunks: list[bytes]) -> tuple[_ChunkReader, _Writer]:
+            reader = _ChunkReader(chunks)
+            writer = _Writer()
+            await asyncio.wait_for(self.srv.handle_client(reader, writer), timeout=1)
+            return reader, writer
+
+        reader, writer = asyncio.run(run([head, body]))
+        self.assertTrue(writer.closed)
+        self.assertEqual(reader.reads, 2)
+        response = bytes(writer.buf)
+        self.assertIn(b"HTTP/1.1 200 OK", response)
+        payload = json.loads(response.split(b"\r\n\r\n", 1)[1])
+        self.assertEqual(payload["id"], 9)
+        self.assertEqual(payload["result"]["ct_type"], "3x63A")
+
+        reader, writer = asyncio.run(run([head + body[:4], body[4:8]]))
+        self.assertTrue(writer.closed)
+        self.assertGreaterEqual(reader.reads, 3)
+        self.assertEqual(writer.buf, b"")
+        self.assertEqual(self.srv.trace.summary()["total_calls"], 1)
+
+    def test_closed_peer_during_extended_websocket_length_does_not_spin(self) -> None:
+        payload = b'{"id":5,"src":"sigen","method":"EM.GetConfig"}'
+        wide = _masked_frame(payload, length_bits=126)
+        huge = _masked_frame(payload, length_bits=127)
+        close = _masked_frame(b"", opcode=0x8)
+
+        async def accept(chunks: list[bytes]) -> tuple[_ChunkReader, bytes]:
+            reader = _ChunkReader(chunks)
+            writer = _Writer()
+            await asyncio.wait_for(
+                self.srv._accept_websocket(
+                    reader,
+                    writer,
+                    {"sec-websocket-key": _WS_KEY},
+                    "10.4.5.6",
+                    b"",
+                ),
+                timeout=1,
+            )
+            return reader, bytes(writer.buf)
+
+        reader, raw = asyncio.run(accept([wide[:2], wide[2:4], wide[4:], close]))
+        self.assertGreaterEqual(reader.reads, 4)
+        head, rest = raw.split(b"\r\n\r\n", 1)
+        self.assertIn(b"HTTP/1.1 101 Switching Protocols", head)
+        frames = _server_frames(rest)
+        self.assertEqual(len(frames), 1)
+        decoded = json.loads(frames[0][1])
+        self.assertEqual(decoded["id"], 5)
+        self.assertEqual(decoded["result"]["ct_type"], "3x63A")
+
+        reader, raw = asyncio.run(accept([huge[:2], huge[2:6], huge[6:]]))
+        self.assertGreaterEqual(reader.reads, 4)
+        _head, rest = raw.split(b"\r\n\r\n", 1)
+        huge_frames = _server_frames(rest)
+        self.assertEqual(len(huge_frames), 1)
+        self.assertEqual(json.loads(huge_frames[0][1])["id"], 5)
+
+        cut_short = (
+            [bytes([0x81, 0xFE])],
+            [bytes([0x81, 0xFF])],
+            [huge[:2], huge[2:6]],
+        )
+        for chunks in cut_short:
+            with self.subTest(chunks=chunks):
+                _reader, raw = asyncio.run(accept(chunks))
+                head, rest = raw.split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 101 Switching Protocols", head)
+                self.assertEqual(rest, b"")
+
+        summary = self.srv.trace.summary()
+        self.assertEqual(summary["methods"].get("EM.GetConfig"), 2)
+        self.assertEqual(summary["total_calls"], 2)
 
     def test_non_finite_meter_value_stays_valid_json(self) -> None:
         self.srv.store.state.a_voltage = float("nan")
