@@ -281,7 +281,12 @@ class ShellyWireServer:
             body = data[match.end() :]
             content_length = int(headers.get("content-length", "0") or "0")
             while len(body) < content_length:
-                body += await reader.read(content_length - len(body))
+                # A closed peer makes read() return b"" immediately. Without
+                # this check the loop never advances and pins the event loop.
+                chunk = await reader.read(content_length - len(body))
+                if not chunk:
+                    return
+                body += chunk
 
             # WebSocket upgrade for /rpc
             if (
@@ -351,16 +356,18 @@ class ShellyWireServer:
                 idx = 2
                 if length == 126:
                     while len(buf) < 4:
-                        buf.extend(await reader.read(4096) or b"")
-                        if not buf:
+                        chunk = await reader.read(4096)
+                        if not chunk:
                             return
+                        buf.extend(chunk)
                     length = struct.unpack("!H", buf[2:4])[0]
                     idx = 4
                 elif length == 127:
                     while len(buf) < 10:
-                        buf.extend(await reader.read(4096) or b"")
-                        if not buf:
+                        chunk = await reader.read(4096)
+                        if not chunk:
                             return
+                        buf.extend(chunk)
                     length = struct.unpack("!Q", buf[2:10])[0]
                     idx = 10
                 mask_len = 4 if masked else 0
