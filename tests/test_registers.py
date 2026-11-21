@@ -280,6 +280,56 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertAlmostEqual(parsed.total_aprt_power, 500.0, places=2)
         self.assertAlmostEqual(parsed.b_aprt_power, 0.0, places=2)
 
+    def test_neutral_current_and_published_phase_power_factors(self) -> None:
+        """Neutral is optional; a corrupt neutral must not publish the other phases."""
+        regs = [0xFFFF] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        # P/(V*I) would be 0.25, ~0.238, and ~0.227. Published PF must win.
+        put_f32(306, 200.0)
+        put_f32(308, 210.0)
+        put_f32(310, 220.0)
+        put_f32(318, 1.25)
+        put_f32(320, 2.0)
+        put_f32(322, 2.0)
+        put_f32(324, 2.0)
+        put_f32(328, 0.8)
+        put_f32(330, -0.6)
+        put_f32(332, 0.4)
+        put_f32(338, 100.0)
+        put_f32(340, 100.0)
+        put_f32(342, 100.0)
+
+        parsed = parse_registers(regs)
+        self.assertTrue(parsed.raw_ok)
+        self.assertAlmostEqual(parsed.n_current or -1.0, 1.25, places=3)
+        self.assertAlmostEqual(parsed.b_voltage, 210.0, places=2)
+        self.assertAlmostEqual(parsed.c_voltage, 220.0, places=2)
+        self.assertAlmostEqual(parsed.a_pf, 0.8, places=3)
+        self.assertAlmostEqual(parsed.b_pf, -0.6, places=3)
+        self.assertAlmostEqual(parsed.c_pf, 0.4, places=3)
+
+        put_f32(318, 0.0)
+        zero = parse_registers(regs)
+        self.assertTrue(zero.raw_ok)
+        self.assertEqual(zero.n_current, 0.0)
+
+        regs[318 - REGISTER_START : 318 - REGISTER_START + 2] = [0xFFFF, 0xFFFF]
+        missing = parse_registers(regs)
+        self.assertTrue(missing.raw_ok)
+        self.assertIsNone(missing.n_current)
+        self.assertAlmostEqual(missing.a_pf, 0.8, places=3)
+
+        regs[318 - REGISTER_START : 318 - REGISTER_START + 2] = _f32_regs(float("nan"))
+        rejected = parse_registers(regs)
+        self.assertFalse(rejected.raw_ok)
+        self.assertEqual(rejected.errors, ["invalid_float32:318"])
+        self.assertEqual(rejected.a_voltage, 0.0)
+        self.assertIsNone(rejected.n_current)
+
 
 if __name__ == "__main__":
     unittest.main()
