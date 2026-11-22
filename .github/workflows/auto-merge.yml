@@ -7,7 +7,7 @@ on:
 env:
   # Cursor PR Routing & Approval submits GitHub reviews as the Cursor GitHub App
   # (login cursor[bot]; see https://github.com/apps/cursor and Cursor Automations → Identity).
-  CURSOR_APPROVER_LOGINS: cursor[bot]
+  CURSOR_APPROVER_LOGINS: cursor[bot],wgentine
 
 permissions:
   contents: write
