@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import inspect
 import struct
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -17,6 +19,7 @@ from pymodbus.exceptions import ModbusException
 
 from app.alfen.client import AlfenClient
 from app.alfen.registers import REGISTER_COUNT, REGISTER_START, AlfenMeasurements
+from app.shelly.responses import build_em_status
 from app.state.energy import EnergyStore
 
 
@@ -200,6 +203,57 @@ class AlfenInvalidBlockTests(unittest.TestCase):
         self.assertEqual(client.poll_count, 1)
         self.assertEqual(client.error_count, 1)
         self.assertEqual(client.last_error, "invalid_float64:374")
+
+    def test_outage_keeps_last_readings_and_recovery_clears_errors(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = EnergyStore(
+            state_path=str(Path(tmp.name) / "state.json"),
+            use_alfen_energy=False,
+        )
+        client = AlfenClient("127.0.0.1", port=1, on_update=store.update_from_alfen)
+        client._ensure_connected = lambda: True  # type: ignore[method-assign]
+
+        def put_f32(regs: list[int], addr: int, value: float) -> None:
+            offset = addr - REGISTER_START
+            hi, lo = struct.unpack(">HH", struct.pack(">f", value))
+            regs[offset : offset + 2] = [hi, lo]
+
+        good = _register_block()
+        put_f32(good, 318, 0.4)
+        client._read_holding = lambda: list(good)  # type: ignore[method-assign]
+        client.poll_once()
+        self.assertTrue(store.state.alfen_ok)
+        self.assertEqual(store.state.alfen_errors, [])
+        self.assertAlmostEqual(store.state.n_current or -1.0, 0.4, places=3)
+        self.assertAlmostEqual(store.state.total_act_power, 1500.0, places=1)
+
+        client._read_holding = lambda: [0] * 10  # type: ignore[method-assign]
+        failed = client.poll_once()
+        self.assertFalse(failed.raw_ok)
+        self.assertFalse(store.state.alfen_ok)
+        self.assertEqual(store.state.alfen_errors, failed.errors)
+        self.assertIn("short_read", store.state.alfen_errors[0])
+        self.assertAlmostEqual(store.state.n_current or -1.0, 0.4, places=3)
+        self.assertAlmostEqual(store.state.a_voltage, 230.0, places=2)
+        self.assertAlmostEqual(store.state.total_act_power, 1500.0, places=1)
+        outage = build_em_status(store.snapshot())
+        self.assertEqual(outage["errors"], store.state.alfen_errors[:3])
+        self.assertAlmostEqual(outage["n_current"], 0.4, places=3)
+        self.assertAlmostEqual(outage["total_act_power"], 1500.0, places=3)
+
+        recovered = _register_block(total_power=800.0)
+        put_f32(recovered, 318, 0.0)
+        client._read_holding = lambda: list(recovered)  # type: ignore[method-assign]
+        client.poll_once()
+        self.assertTrue(store.state.alfen_ok)
+        self.assertEqual(store.state.alfen_errors, [])
+        self.assertEqual(store.state.n_current, 0.0)
+        self.assertAlmostEqual(store.state.total_act_power, 800.0, places=1)
+        healthy = build_em_status(store.snapshot())
+        self.assertNotIn("errors", healthy)
+        self.assertEqual(healthy["n_current"], 0.0)
+        self.assertAlmostEqual(healthy["total_act_power"], 800.0, places=3)
 
 
 class _FakeSocket:

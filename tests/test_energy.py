@@ -352,6 +352,90 @@ class EnergyStoreTests(unittest.TestCase):
         self.assertAlmostEqual(store.state.a_voltage, 231.0, places=3)
         self.assertFalse(store.state_path.exists())
 
+    def test_live_readings_replace_the_previous_sample(self) -> None:
+        store = self._store()
+        store.update_from_alfen(
+            _meter(
+                a_voltage=230.1,
+                b_voltage=231.2,
+                c_voltage=229.3,
+                a_current=1.5,
+                b_current=-0.5,
+                c_current=0.25,
+                n_current=0.4,
+                a_pf=0.95,
+                b_pf=-0.8,
+                c_pf=0.7,
+                frequency=49.8,
+                a_act_power=300.0,
+                b_act_power=-100.0,
+                c_act_power=50.0,
+                total_act_power=250.0,
+                a_aprt_power=320.0,
+                b_aprt_power=130.0,
+                c_aprt_power=80.0,
+                total_aprt_power=530.0,
+                raw_ok=False,
+                errors=["stale"],
+            )
+        )
+
+        state = store.state
+        self.assertFalse(state.alfen_ok)
+        self.assertEqual(state.alfen_errors, ["stale"])
+        self.assertEqual(state.n_current, 0.4)
+        self.assertEqual(state.a_freq, 49.8)
+        self.assertEqual(state.b_freq, 49.8)
+        self.assertEqual(state.c_freq, 49.8)
+        self.assertEqual(state.b_voltage, 231.2)
+        self.assertEqual(state.c_act_power, 50.0)
+        self.assertEqual(state.b_pf, -0.8)
+        self.assertEqual(state.c_aprt_power, 80.0)
+        self.assertEqual(state.total_aprt_power, 530.0)
+        self.assertEqual(state.last_update_ts, self._clock[0])
+        view = store.debug_dict()
+        self.assertEqual(view["power"], {"a": 300.0, "b": -100.0, "c": 50.0, "total": 250.0})
+        self.assertEqual(view["voltage"], {"a": 230.1, "b": 231.2, "c": 229.3})
+        self.assertEqual(view["current"], {"a": 1.5, "b": -0.5, "c": 0.25})
+        self.assertEqual(view["alfen_errors"], ["stale"])
+        self.assertFalse(view["alfen_ok"])
+
+        self._clock[0] += 5.0
+        store.update_from_alfen(
+            _meter(
+                a_voltage=220.0,
+                b_voltage=221.0,
+                c_voltage=222.0,
+                a_current=0.0,
+                b_current=0.0,
+                c_current=0.0,
+                n_current=None,
+                a_pf=0.0,
+                b_pf=0.0,
+                c_pf=0.0,
+                frequency=0.0,
+                a_act_power=0.0,
+                b_act_power=0.0,
+                c_act_power=0.0,
+                total_act_power=0.0,
+                a_aprt_power=0.0,
+                b_aprt_power=0.0,
+                c_aprt_power=0.0,
+                total_aprt_power=0.0,
+            )
+        )
+        cleared = store.state
+        self.assertTrue(cleared.alfen_ok)
+        self.assertEqual(cleared.alfen_errors, [])
+        self.assertIsNone(cleared.n_current)
+        self.assertEqual(cleared.a_freq, 0.0)
+        self.assertEqual(cleared.b_freq, 0.0)
+        self.assertEqual(cleared.c_freq, 0.0)
+        self.assertEqual(cleared.a_voltage, 220.0)
+        self.assertEqual(cleared.total_act_power, 0.0)
+        self.assertEqual(cleared.last_update_ts, self._clock[0])
+        self.assertEqual(store.debug_dict()["alfen_errors"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
