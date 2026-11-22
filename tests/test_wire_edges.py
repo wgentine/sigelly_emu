@@ -280,6 +280,17 @@ class WireEdgeTests(unittest.TestCase):
                 self.assertIn(b"HTTP/1.1 101 Switching Protocols", head)
                 self.assertEqual(rest, b"")
 
+        # Ordinary masked frames (7-bit length) close in the payload loop,
+        # not the extended-length loops above.
+        ordinary = _masked_frame(payload)
+        for chunks in ([ordinary[:2]], [ordinary[:2], ordinary[2:7]]):
+            with self.subTest(chunks=chunks):
+                reader, raw = asyncio.run(accept(chunks))
+                head, rest = raw.split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 101 Switching Protocols", head)
+                self.assertEqual(rest, b"")
+                self.assertGreaterEqual(reader.reads, 2)
+
         summary = self.srv.trace.summary()
         self.assertEqual(summary["methods"].get("EM.GetConfig"), 2)
         self.assertEqual(summary["total_calls"], 2)

@@ -135,6 +135,20 @@ class WireDispatchTests(_WireHarness):
         self.assertIn(b"HTTP/1.1 400 Bad Request", missing)
         self.assertEqual(json.loads(missing.split(b"\r\n\r\n", 1)[1]), {"error": "method required"})
 
+        queried = self.srv._handle_http(
+            "GET",
+            "/rpc?method=Shelly.GetComponents&include=config&id=0",
+            {},
+            b"",
+            "10.0.0.8",
+        )
+        self.assertIn(b"HTTP/1.1 200 OK", queried)
+        queried_body = json.loads(queried.split(b"\r\n\r\n", 1)[1])
+        self.assertIn("config", queried_body["components"][0])
+        self.assertNotIn("status", queried_body["components"][0])
+        self.assertNotIn("result", queried_body)
+        self.assertNotIn("error", queried_body)
+
         components = self.srv._handle_http(
             "GET",
             "/rpc/Shelly.GetComponents?include=config",
