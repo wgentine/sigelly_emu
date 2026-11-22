@@ -55,6 +55,35 @@ class AlfenPollOnceTests(unittest.TestCase):
         self.assertEqual(client.error_count, 1)
         self.assertEqual(seen, [])
 
+    def test_connect_failure_after_success_keeps_last_good_without_republishing(self) -> None:
+        seen: list[AlfenMeasurements] = []
+        client = AlfenClient("127.0.0.1", port=1, on_update=seen.append)
+        client._ensure_connected = lambda: True  # type: ignore[method-assign]
+        client._read_holding = lambda: _register_block(voltage=231.5)  # type: ignore[method-assign]
+
+        good = client.poll_once()
+        self.assertTrue(good.raw_ok)
+        self.assertAlmostEqual(good.a_voltage, 231.5, places=2)
+        self.assertEqual(len(seen), 1)
+        polled_at = client.last_poll_ts
+        self.assertGreater(polled_at, 0.0)
+
+        client._ensure_connected = lambda: False  # type: ignore[method-assign]
+        client._last_error = "connect_failed:127.0.0.1:1"
+        failed = client.poll_once()
+
+        self.assertFalse(failed.raw_ok)
+        self.assertAlmostEqual(failed.a_voltage, 231.5, places=2)
+        self.assertAlmostEqual(failed.total_act_power, 1500.0, places=1)
+        self.assertEqual(failed.errors, ["connect_failed:127.0.0.1:1"])
+        self.assertEqual(client.poll_count, 1)
+        self.assertEqual(client.error_count, 1)
+        self.assertEqual(client.last_poll_ts, polled_at)
+        self.assertAlmostEqual(client.last.a_voltage, 231.5, places=2)
+        self.assertFalse(client.get_status()["last_ok"])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].raw_ok)
+
     def test_read_failure_keeps_last_good_measurements(self) -> None:
         client = AlfenClient("127.0.0.1", port=1)
         client._ensure_connected = lambda: True  # type: ignore[method-assign]

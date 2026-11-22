@@ -204,6 +204,21 @@ class HttpAppTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 400)
         self.assertEqual(_json(missing), {"error": "method required"})
 
+        queried = asyncio.run(
+            main.rpc_get(
+                _request(
+                    "GET",
+                    "/rpc",
+                    query="method=Shelly.GetComponents&include=config&id=0",
+                )
+            )
+        )
+        self.assertEqual(queried.status_code, 200)
+        queried_body = _json(queried)
+        self.assertIn("config", queried_body["components"][0])
+        self.assertNotIn("status", queried_body["components"][0])
+        self.assertNotIn("error", queried_body)
+
         for query in ("batch={", "batch=%7B%7D"):
             with self.subTest(query=query):
                 rejected = asyncio.run(main.rpc_get(_request("GET", "/rpc", query=query)))
