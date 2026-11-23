@@ -89,6 +89,44 @@ class ModbusMapTests(unittest.TestCase):
         neutral_map = build_register_map(_settings(), neutral)
         self.assertAlmostEqual(_f32(neutral_map, 1007), 0.4, places=3)
 
+    def test_per_phase_current_apparent_power_and_pf(self) -> None:
+        """Sigenstor reads each phase; a swapped current or PF still sums the same."""
+        state = MeterState(
+            a_current=1.5,
+            b_current=-0.25,
+            c_current=0.5,
+            a_aprt_power=300.0,
+            b_aprt_power=40.0,
+            c_aprt_power=90.0,
+            a_pf=0.98,
+            b_pf=-0.5,
+            c_pf=0.25,
+            a_freq=49.9,
+            b_freq=50.0,
+            c_freq=50.1,
+            n_current=-0.4,
+            last_update_ts=1_700_000_000.0,
+        )
+        reg_map = build_register_map(_settings(), state)
+
+        self.assertAlmostEqual(_f32(reg_map, 1007), -0.4, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1011), 1.75, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1022), 1.5, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1026), 300.0, places=2)
+        self.assertAlmostEqual(_f32(reg_map, 1028), 0.98, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1033), 49.9, places=2)
+        self.assertAlmostEqual(_f32(reg_map, 1042), -0.25, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1046), 40.0, places=2)
+        self.assertAlmostEqual(_f32(reg_map, 1048), -0.5, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1053), 50.0, places=2)
+        self.assertAlmostEqual(_f32(reg_map, 1062), 0.5, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1066), 90.0, places=2)
+        self.assertAlmostEqual(_f32(reg_map, 1068), 0.25, places=3)
+        self.assertAlmostEqual(_f32(reg_map, 1073), 50.1, places=2)
+        # PF occupies two registers; the following padding must stay zero.
+        for addr in (1030, 1031, 1032, 1050, 1051, 1052, 1070, 1071, 1072):
+            self.assertEqual(reg_map[addr], 0, msg=f"register {addr}")
+
     def test_identity_string_is_word_swapped_and_truncated(self) -> None:
         reg_map = build_register_map(
             _settings(shelly_model="SPEM-003CEBEU63EXTRA"),
