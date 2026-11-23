@@ -222,6 +222,43 @@ class EnergyStoreTests(unittest.TestCase):
         self.assertEqual(store.state.energy.total_act, 0.0)
         self.assertEqual(store.state.energy.source, "alfen")
 
+    def test_phase_b_lifetime_energy_replaces_integrated_counters(self) -> None:
+        """A later L2 lifetime block must wipe integrated Wh, not add to it.
+
+        Energy registers are often missing until the charger has a session.
+        With ALFEN_USE_ENERGY set, the first valid phase counter opts in and
+        replaces every counter, including export accumulated on another phase.
+        """
+        store = self._store(use_alfen_energy=True)
+        exporting = _meter(a_act_power=-3600.0, total_act_power=-3600.0)
+        store.update_from_alfen(exporting)
+        self._clock[0] += 3600.0
+        store.update_from_alfen(exporting)
+        self.assertAlmostEqual(store.state.energy.total_act_ret, 3600.0, places=3)
+        self.assertEqual(store.state.energy.total_act, 0.0)
+        self.assertEqual(store.state.energy.source, "integrated")
+
+        # Thirty seconds of the same export must not be added onto the new block.
+        self._clock[0] += 30.0
+        store.update_from_alfen(
+            _meter(
+                a_act_power=-3600.0,
+                total_act_power=-3600.0,
+                b_total_act_energy=80.0,
+                b_total_act_ret_energy=2.5,
+            )
+        )
+        energy = store.state.energy
+        self.assertEqual(energy.source, "alfen")
+        self.assertAlmostEqual(energy.b_total_act_energy, 80.0, places=3)
+        self.assertAlmostEqual(energy.total_act, 80.0, places=3)
+        self.assertAlmostEqual(energy.a_total_act_energy, 0.0, places=3)
+        self.assertAlmostEqual(energy.c_total_act_energy, 0.0, places=3)
+        self.assertAlmostEqual(energy.b_total_act_ret_energy, 2.5, places=3)
+        self.assertAlmostEqual(energy.total_act_ret, 2.5, places=3)
+        self.assertAlmostEqual(energy.a_total_act_ret_energy, 0.0, places=3)
+        self.assertAlmostEqual(energy.c_total_act_ret_energy, 0.0, places=3)
+
     def test_only_energy_counters_survive_reload(self) -> None:
         store = self._store()
         store.update_from_alfen(_meter(a_voltage=230.0, total_act_power=0.0))
