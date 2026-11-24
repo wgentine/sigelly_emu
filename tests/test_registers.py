@@ -127,6 +127,37 @@ class RegisterDecodeTests(unittest.TestCase):
         self.assertTrue(parsed.raw_ok)
         self.assertAlmostEqual(parsed.total_act_power, 350.0, places=2)
 
+    def test_published_totals_stay_when_they_disagree_with_the_phases(self) -> None:
+        """A non-zero sum register is kept even when it is not a+b+c.
+
+        The zero-total path synthesizes a sum from the phases. A charger that
+        publishes both must not have that sum rewritten, or EM status and the
+        Wh counters bill a different total than the socket register.
+        """
+        regs = [0] * REGISTER_COUNT
+
+        def put_f32(addr: int, value: float) -> None:
+            off = addr - REGISTER_START
+            regs[off : off + 2] = _f32_regs(value)
+
+        put_f32(338, 1000.0)
+        put_f32(340, 1000.0)
+        put_f32(344, -500.0)
+        put_f32(346, 400.0)
+        put_f32(348, 100.0)
+        put_f32(352, 50.0)
+
+        parsed = parse_registers(regs)
+        self.assertTrue(parsed.raw_ok)
+        self.assertAlmostEqual(parsed.a_act_power, 1000.0, places=2)
+        self.assertAlmostEqual(parsed.b_act_power, 1000.0, places=2)
+        self.assertAlmostEqual(parsed.c_act_power, 0.0, places=2)
+        self.assertAlmostEqual(parsed.total_act_power, -500.0, places=2)
+        self.assertAlmostEqual(parsed.a_aprt_power, 400.0, places=2)
+        self.assertAlmostEqual(parsed.b_aprt_power, 100.0, places=2)
+        self.assertAlmostEqual(parsed.c_aprt_power, 0.0, places=2)
+        self.assertAlmostEqual(parsed.total_aprt_power, 50.0, places=2)
+
     def test_split_power_across_phases_by_current(self) -> None:
         regs = [0xFFFF] * REGISTER_COUNT
 

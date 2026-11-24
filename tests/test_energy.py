@@ -69,6 +69,33 @@ class EnergyStoreTests(unittest.TestCase):
         self.assertAlmostEqual(energy.total_act, 500.0, places=3)
         self.assertAlmostEqual(energy.total_act_ret, 0.0, places=3)
 
+    def test_total_wh_follows_the_sum_register_when_phases_disagree(self) -> None:
+        """Total Wh tracks total_act_power, not the sum of the phase powers.
+
+        Existing cases use a total that matches a+b+c, so a change that
+        derived the total from the phases would still pass. A published sum
+        with the opposite sign must import on the phases and export on the total.
+        """
+        store = self._store()
+        sample = _meter(
+            a_act_power=1000.0,
+            b_act_power=1000.0,
+            c_act_power=0.0,
+            total_act_power=-500.0,
+        )
+        store.update_from_alfen(sample)
+        self._clock[0] += 3600.0
+        store.update_from_alfen(sample)
+
+        energy = store.state.energy
+        self.assertAlmostEqual(energy.a_total_act_energy, 1000.0, places=3)
+        self.assertAlmostEqual(energy.b_total_act_energy, 1000.0, places=3)
+        self.assertAlmostEqual(energy.c_total_act_energy, 0.0, places=3)
+        self.assertAlmostEqual(energy.a_total_act_ret_energy, 0.0, places=3)
+        self.assertAlmostEqual(energy.total_act, 0.0, places=3)
+        self.assertAlmostEqual(energy.total_act_ret, 500.0, places=3)
+        self.assertEqual(energy.source, "integrated")
+
     def test_net_export_credits_the_return_counter_then_import_leaves_it(self) -> None:
         store = self._store()
         exporting = _meter(
