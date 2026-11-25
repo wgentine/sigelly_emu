@@ -115,6 +115,41 @@ class AlfenPollOnceTests(unittest.TestCase):
         self.assertFalse(status["last_ok"])
         self.assertEqual(status["last_error"], "empty_registers")
 
+    def test_first_read_failure_does_not_publish_to_the_store(self) -> None:
+        """A socket error before any good sample must not look like a meter reading.
+
+        Parse failures call on_update so EM.GetStatus can show the fault. A failed
+        read returns before that, and must leave persisted Wh and the last published
+        powers untouched.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            store = EnergyStore(
+                state_path=str(Path(tmp) / "state.json"),
+                use_alfen_energy=True,
+            )
+            store.state.energy.total_act = 88000.0
+            store.state.total_act_power = 42.0
+            client = AlfenClient("127.0.0.1", port=1, on_update=store.update_from_alfen)
+            client._ensure_connected = lambda: True  # type: ignore[method-assign]
+            client._read_holding = lambda: None  # type: ignore[method-assign]
+            client._last_error = "empty_registers"
+
+            failed = client.poll_once()
+
+            self.assertFalse(failed.raw_ok)
+            self.assertEqual(failed.total_act_power, 0.0)
+            self.assertEqual(failed.errors, ["empty_registers"])
+            self.assertEqual(client.poll_count, 0)
+            self.assertEqual(client.error_count, 1)
+            self.assertFalse(client.connected)
+            self.assertEqual(client.last_error, "empty_registers")
+            self.assertEqual(store.state.total_act_power, 42.0)
+            self.assertEqual(store.state.energy.total_act, 88000.0)
+            self.assertEqual(store.state.energy.source, "integrated")
+            self.assertFalse(store.state.alfen_ok)
+            self.assertEqual(store.state.alfen_errors, [])
+            self.assertNotIn("errors", build_em_status(store.snapshot()))
+
     def test_on_update_error_does_not_fail_the_poll(self) -> None:
         def boom(_: object) -> None:
             raise RuntimeError("callback failed")
@@ -165,6 +200,35 @@ class AlfenInvalidBlockTests(unittest.TestCase):
         self.assertAlmostEqual(store.state.total_act_power, 1500.0, places=1)
         self.assertEqual(client.poll_count, 1)
         self.assertEqual(client.error_count, 2)
+
+    def test_first_invalid_block_reports_the_fault_and_keeps_watt_hours(self) -> None:
+        """No prior good sample: publish the fault, do not adopt the frame as 0 Wh."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = EnergyStore(
+                state_path=str(Path(tmp) / "state.json"),
+                use_alfen_energy=True,
+            )
+            store.state.energy.total_act = 88000.0
+            store.state.energy.total_act_ret = 1200.0
+            store.state.energy.source = "alfen"
+            client = AlfenClient("127.0.0.1", port=1, on_update=store.update_from_alfen)
+            client._ensure_connected = lambda: True  # type: ignore[method-assign]
+            client._read_holding = lambda: [0] * 10  # type: ignore[method-assign]
+
+            failed = client.poll_once()
+
+            self.assertFalse(failed.raw_ok)
+            self.assertEqual(failed.total_act_power, 0.0)
+            self.assertTrue(failed.errors[0].startswith("short_read:"))
+            self.assertEqual(client.poll_count, 0)
+            self.assertEqual(client.error_count, 1)
+            self.assertEqual(store.state.total_act_power, 0.0)
+            self.assertFalse(store.state.alfen_ok)
+            self.assertEqual(store.state.alfen_errors, failed.errors)
+            self.assertEqual(store.state.energy.total_act, 88000.0)
+            self.assertEqual(store.state.energy.total_act_ret, 1200.0)
+            self.assertEqual(store.state.energy.source, "alfen")
+            self.assertEqual(build_em_status(store.snapshot())["errors"], failed.errors)
 
     def test_invalid_float64_energy_keeps_last_good_watt_hours(self) -> None:
         store = EnergyStore(
